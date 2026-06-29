@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#1a1a2e">
   <title>3D Print Manager</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
@@ -173,6 +172,114 @@ function App() {
       </div>
     </div>
   );
+}
+
+// ── INVOICE HELPER ────────────────────────────────────────────────────────────
+function buildInvoiceHTML(type, ptKc, invoice, pt) {
+  var CSS = 'body{font-family:Arial,sans-serif;padding:16px;color:#111;max-width:800px;margin:0 auto}'
+    + 'h2{color:#0f3460;text-align:center;margin-bottom:8px}'
+    + 'p{margin:4px 0 8px;font-size:14px}'
+    + 'table{width:100%;border-collapse:collapse;margin:12px 0}'
+    + 'th,td{padding:8px 10px;border:1px solid #ddd;font-size:13px}'
+    + 'th{background:#f0f0f0;font-weight:600}'
+    + '.sign{display:flex;justify-content:space-between;margin-top:28px;padding-top:12px;border-top:1px dashed #ccc;font-size:13px}'
+    + '.total{font-weight:700;background:#e8f8f0}';
+
+  var nowDate = new Date().toISOString().slice(0,10);
+  var ptType = pt.type === 'buyout' ? 'Викуп' : 'Реалізація';
+  var addr = pt.address ? ' · ' + pt.address : '';
+  var header = '<p><strong>Заклад:</strong> ' + pt.name + addr + '</p>'
+    + '<p><strong>Тип:</strong> ' + ptType + '</p>';
+  var body = '';
+
+  if (type === 'general') {
+    var rows = '';
+    var totalQty = 0; var totalSum = 0;
+    for (var i = 0; i < ptKc.length; i++) {
+      var k = ptKc[i];
+      var rem = k.qty - k.sold;
+      var sum = rem * k.price;
+      totalQty += rem; totalSum += sum;
+      var bg = i % 2 === 0 ? '#fff' : '#f9f9f9';
+      rows += '<tr style="background:' + bg + '"><td>' + k.name + '</td>'
+        + '<td style="text-align:center">' + rem + ' шт</td>'
+        + '<td style="text-align:center">' + k.price + ' грн</td>'
+        + '<td style="text-align:right;font-weight:700">' + sum + ' грн</td></tr>';
+    }
+    body = '<h2>НАКЛАДНА ЗАЛИШКІВ</h2>'
+      + '<p style="text-align:center;color:#888">Дата: ' + nowDate + '</p>'
+      + header
+      + '<table><thead><tr><th>Назва</th><th>Кількість</th><th>Ціна</th><th>Сума</th></tr></thead>'
+      + '<tbody>' + rows
+      + '<tr class="total"><td>РАЗОМ</td><td style="text-align:center">' + totalQty + ' шт</td><td></td>'
+      + '<td style="text-align:right">' + totalSum + ' грн</td></tr>'
+      + '</tbody></table>'
+      + '<div class="sign"><div>Підтверджую: _______________</div><div>Дата: _______________</div></div>';
+  } else if (invoice) {
+    var rows2 = '';
+    var tQty = 0; var tSum = 0;
+    for (var j = 0; j < invoice.newItems.length; j++) {
+      var item = invoice.newItems[j];
+      var s = item.qty * item.price;
+      tQty += item.qty; tSum += s;
+      var bg2 = j % 2 === 0 ? '#fff' : '#f9f9f9';
+      rows2 += '<tr style="background:' + bg2 + '"><td>' + item.name + '</td>'
+        + '<td style="text-align:center">' + item.qty + ' шт</td>'
+        + '<td style="text-align:center">' + item.price + ' грн</td>'
+        + '<td style="text-align:right;font-weight:700">' + s + ' грн</td></tr>';
+    }
+    body = '<h2>НАКЛАДНА НА ПОСТАЧАННЯ</h2>'
+      + '<p style="text-align:center;color:#888">Дата: ' + invoice.date + '</p>'
+      + header
+      + '<table><thead><tr><th>Назва</th><th>Кількість</th><th>Ціна</th><th>Сума</th></tr></thead>'
+      + '<tbody>' + rows2
+      + '<tr class="total"><td>РАЗОМ</td><td style="text-align:center">' + tQty + ' шт</td><td></td>'
+      + '<td style="text-align:right">' + tSum + ' грн</td></tr>'
+      + '</tbody></table>'
+      + '<div class="sign"><div>Здав: _______________</div><div>Прийняв: _______________</div></div>';
+  }
+
+  return '<!DOCTYPE html><html><head><meta charset="UTF-8">'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<style>' + CSS + '</style></head><body>' + body + '</body></html>';
+}
+
+function showInvoiceOverlay(type, ptKc, invoice, pt) {
+  var html = buildInvoiceHTML(type, ptKc, invoice, pt);
+  // Remove old overlay if exists
+  var old = document.getElementById('invoice-overlay');
+  if (old) old.remove();
+  // Create overlay
+  var overlay = document.createElement('div');
+  overlay.id = 'invoice-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#fff;overflow:auto;display:flex;flex-direction:column';
+  // Toolbar
+  var toolbar = document.createElement('div');
+  toolbar.style.cssText = 'background:#0f3460;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;position:sticky;top:0';
+  var closeBtn = document.createElement('button');
+  closeBtn.textContent = 'X Закрити';
+  closeBtn.style.cssText = 'background:#e94560;border:none;color:#fff;padding:7px 16px;border-radius:8px;font-size:14px;cursor:pointer;font-weight:600';
+  closeBtn.onclick = function() { document.getElementById('invoice-overlay').remove(); };
+  var title = document.createElement('strong');
+  title.textContent = 'Накладна';
+  title.style.fontSize = '15px';
+  toolbar.appendChild(title);
+  toolbar.appendChild(closeBtn);
+  // Content div - direct HTML injection (works in all browsers/Telegram)
+  var content = document.createElement('div');
+  content.style.cssText = 'flex:1;overflow:auto;padding:20px;font-family:Arial,sans-serif;color:#111;background:#fff';
+  // Extract body content from html string
+  var bodyMatch = html.match(/<body>([\s\S]*)<\/body>/);
+  var styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
+  if (styleMatch) {
+    var styleEl = document.createElement('style');
+    styleEl.textContent = styleMatch[1];
+    overlay.appendChild(styleEl);
+  }
+  content.innerHTML = bodyMatch ? bodyMatch[1] : html;
+  overlay.appendChild(toolbar);
+  overlay.appendChild(content);
+  document.body.appendChild(overlay);
 }
 
 // ── DASHBOARD ──────────────────────────────────────────────────────────────────
@@ -1342,26 +1449,7 @@ function PointProfile({ pt, setPoints, onBack, totalStock, totalSold, totalInSto
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"16px 20px", borderBottom:"1px solid #eee", flexWrap:"wrap", gap:8 }}>
               <strong style={{ color:"#0f3460", fontSize:15 }}>📄 {printModal.type==="general"?"Накладна залишків":"Накладна поставки"}</strong>
               <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                <button onClick={()=>{
-                  const nowDate = new Date().toISOString().slice(0,10);
-                  const ptType = safePt.type==="buyout" ? "💰 Викуп" : "🔄 Реалізація";
-                  let htmlContent = "";
-                  if(printModal.type==="general") {
-                    const rows = ptKc.map((k,i)=>`<tr style="background:${i%2===0?'#fff':'#f9f9f9'}"><td>${k.name}</td><td style="text-align:center">${k.qty-k.sold} шт</td><td style="text-align:center">${k.price} грн</td><td style="text-align:right;font-weight:700">${(k.qty-k.sold)*k.price} грн</td></tr>`).join("");
-                    htmlContent = `<h2 style="color:#0f3460;text-align:center">НАКЛАДНА ЗАЛИШКІВ</h2><p style="text-align:center;color:#888;margin:4px 0">Дата: ${nowDate}</p><p><strong>Заклад:</strong> ${safePt.name}${safePt.address?" · "+safePt.address:""}</p><p><strong>Тип:</strong> ${ptType}</p><table><thead><tr><th>Назва</th><th>Кількість</th><th>Ціна</th><th>Сума</th></tr></thead><tbody>${rows}<tr style="background:#e8f8f0;font-weight:700"><td>РАЗОМ</td><td style="text-align:center">${ptKc.reduce((s,k)=>s+(k.qty-k.sold),0)} шт</td><td></td><td style="text-align:right">${ptKc.reduce((s,k)=>s+(k.qty-k.sold)*k.price,0)} грн</td></tr></tbody></table><div class="sign"><div>Підтверджую: _______________</div><div>Дата: _______________</div></div>`;
-                  } else if(invoice) {
-                    const rows = invoice.newItems.map((item,i)=>`<tr style="background:${i%2===0?'#fff':'#f9f9f9'}"><td>${item.name}</td><td style="text-align:center">${item.qty} шт</td><td style="text-align:center">${item.price} грн</td><td style="text-align:right;font-weight:700">${item.qty*item.price} грн</td></tr>`).join("");
-                    htmlContent = `<h2 style="color:#0f3460;text-align:center">НАКЛАДНА НА ПОСТАЧАННЯ</h2><p style="text-align:center;color:#888;margin:4px 0">Дата: ${invoice.date}</p><p><strong>Заклад:</strong> ${safePt.name}${safePt.address?" · "+safePt.address:""}</p><p><strong>Тип:</strong> ${ptType}</p><table><thead><tr><th>Назва</th><th>Кількість</th><th>Ціна</th><th>Сума</th></tr></thead><tbody>${rows}<tr style="background:#e8f4fd;font-weight:700"><td>РАЗОМ</td><td style="text-align:center">${invoice.newItems.reduce((s,i)=>s+i.qty,0)} шт</td><td></td><td style="text-align:right">${invoice.newItems.reduce((s,i)=>s+i.qty*i.price,0)} грн</td></tr></tbody></table><div class="sign"><div>Здав: _______________</div><div>Прийняв: _______________</div></div>`;
-                  }
-                  const full = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:Arial,sans-serif;padding:20px;color:#111;max-width:800px;margin:0 auto}h2{margin-bottom:8px}p{margin:4px 0 8px;font-size:14px}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{padding:8px 10px;border:1px solid #ddd;font-size:13px}th{background:#f0f0f0;font-weight:600}.sign{display:flex;justify-content:space-between;margin-top:30px;padding-top:14px;border-top:1px dashed #ccc;font-size:13px}</style></head><body>${htmlContent}</body></html>`;
-                  const blob = new Blob([full], {type:"text/html;charset=utf-8"});
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = "nakladna-" + nowDate + ".html";
-                  a.click();
-                  setTimeout(()=>URL.revokeObjectURL(url), 1000);
-                }} style={btnPrimary}>💾 Завантажити</button>
+                <button onClick={()=>showInvoiceOverlay(printModal.type, ptKc, invoice, safePt)} style={btnPrimary}>📄 Відкрити накладну</button>
                 <button onClick={()=>setPrintModal(null)} style={btnSecondary}>✕ Закрити</button>
               </div>
             </div>
