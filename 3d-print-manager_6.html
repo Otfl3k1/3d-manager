@@ -1,0 +1,1695 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1a1a2e">
+  <title>3D Print Manager</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; background: #F7F8FA; }
+    input[type=range] { -webkit-appearance: none; appearance: none; height: 6px; border-radius: 3px; background: #e0e0e0; outline: none; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #e94560; cursor: pointer; }
+    input, select, textarea { -webkit-appearance: none; appearance: none; }
+    ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+const uid = () => Math.random().toString(36).slice(2, 9);
+const fmt = (n) => Number(n || 0).toFixed(2);
+const today = () => new Date().toISOString().slice(0, 10);
+
+const STATUS_COLORS = {
+  "Новый":    { bg:"#E8F4FD", text:"#1a6fa8" },
+  "В работе": { bg:"#FFF3CD", text:"#856404" },
+  "Готов":    { bg:"#D1F2EB", text:"#0e6655" },
+  "Выдан":    { bg:"#F0F0F0", text:"#555" },
+  "Отменён":  { bg:"#FDECEA", text:"#c0392b" },
+};
+const FILAMENT_COLORS = ["#E74C3C","#E67E22","#F1C40F","#2ECC71","#1ABC9C","#3498DB","#9B59B6","#ECF0F1","#2C3E50","#E91E63"];
+
+const SEED_ORDERS = [
+  { id:uid(), client:"Иван Петров",   phone:"+380671234567", item:"Брелок-лого",      grams:12,  printHours:0.5, price:80,  hasModel:false, modelHours:0, modelRate:100, status:"Выдан",    date:"2025-06-10", filament:"PLA",   note:"" },
+  { id:uid(), client:"Кофейня Roast", phone:"+380501112233", item:"Подставка x10",    grams:140, printHours:4,   price:650, hasModel:false, modelHours:0, modelRate:100, status:"Готов",    date:"2025-06-15", filament:"PLA",  note:"Срочно!" },
+  { id:uid(), client:"Алина Коваль",  phone:"+380931234000", item:"Підставка з лого", grams:35,  printHours:2,   price:220, hasModel:true,  modelHours:3, modelRate:100, status:"В работе", date:"2025-06-20", filament:"PETG",  note:"Лого компанії" },
+  { id:uid(), client:"Михайло Лис",   phone:"+380669998877", item:"Брелок-авто",      grams:8,   printHours:0.3, price:60,  hasModel:true,  modelHours:1, modelRate:150, status:"Новый",    date:"2025-06-23", filament:"PLA", note:"" },
+];
+const SEED_FILAMENTS = [
+  { id:uid(), name:"PLA",      color:"#aaa", stock:1000, cost:0.28 },
+  { id:uid(), name:"PLA Silk", color:"#aaa", stock:1000, cost:0.35 },
+  { id:uid(), name:"PETG",     color:"#aaa", stock:1000, cost:0.35 },
+];
+const SEED_POINTS = [
+  { id:uid(), name:"Кофейня Roast", address:"вул. Дерибасівська, 12", instagram:"@roast_coffee", telegram:"", phone:"+380671234567",
+    keychains:[{ id:uid(), name:"Брелок-собака", qty:5, price:120, sold:2, paid:false },{ id:uid(), name:"Брелок-кот", qty:3, price:120, sold:1, paid:false }],
+    payments:[], pointOrders:[], note:"" },
+  { id:uid(), name:"Кофейня Aroma", address:"пр. Шевченка, 45", instagram:"@aroma_odesa", telegram:"@aroma", phone:"",
+    keychains:[{ id:uid(), name:"Брелок-авто", qty:8, price:100, sold:3, paid:false }],
+    payments:[{ id:uid(), amount:300, date:"2025-06-01", note:"Перша виплата" }], pointOrders:[], note:"" },
+  { id:uid(), name:"Кофейня Beans", address:"вул. Пушкінська, 7", instagram:"", telegram:"@beans_coffee", phone:"+380931234000",
+    keychains:[], payments:[], pointOrders:[], note:"" },
+];
+
+async function loadData(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+  catch { return fallback; }
+}
+async function saveData(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+}
+
+// Считаем итог по заказу
+function calcOrder(o, filaments) {
+  const fil = filaments.find(f => f.name === o.filament);
+  const matCost   = Number(o.grams||0) * (fil ? fil.cost : 0);
+  const elecCost  = Number(o.printHours||0) * 4.5;
+  const modelCost = o.hasModel ? Number(o.modelHours||0) * Number(o.modelRate||0) : 0;
+  const cost      = matCost + elecCost;
+  const revenue   = Number(o.price||0) + modelCost;
+  const profit    = revenue - cost;
+  return { matCost, elecCost, modelCost, cost, revenue, profit };
+}
+
+function App() {
+  const [tab, setTab]             = useState("orders");
+  const [orders, setOrders]       = useState(SEED_ORDERS);
+  const [filaments, setFilaments] = useState(SEED_FILAMENTS);
+  const [points, setPoints]       = useState(SEED_POINTS);
+  const [loaded, setLoaded]       = useState(false);
+  const [prefill, setPrefill]     = useState(null); // data from AI to prefill calculator
+
+  useEffect(() => {
+    (async () => {
+      const [o,f,p] = await Promise.all([
+        loadData("3dp2_orders", SEED_ORDERS),
+        loadData("3dp2_filaments", SEED_FILAMENTS),
+        loadData("3dp3_points", SEED_POINTS),
+      ]);
+      // Always normalize points on load
+      const clean = (s) => (!s || ["—","-","–"].includes(s.trim())) ? "" : s.trim();
+      const normalizePoint = (pt) => ({
+        ...pt,
+        keychains: Array.isArray(pt.keychains) ? pt.keychains : (Array.isArray(pt.items) ? pt.items.map(i=>({...i, sold:i.sold||0, paid:false})) : []),
+        payments:  Array.isArray(pt.payments)  ? pt.payments  : [],
+        instagram: clean(pt.instagram),
+        telegram:  clean(pt.telegram),
+        phone:     clean(pt.phone || pt.contact),
+        note:      pt.note || "",
+        name:      pt.name || "",
+        address:   pt.address || "",
+        id:        pt.id || uid(),
+        pointOrders: Array.isArray(pt.pointOrders) ? pt.pointOrders : [],
+        type: pt.type || 'consignment',
+      });
+      const normalizedPoints = Array.isArray(p) ? p.map(normalizePoint) : SEED_POINTS.map(normalizePoint);
+      setOrders(o); setFilaments(f); setPoints(normalizedPoints);
+      setLoaded(true);
+    })();
+  }, []);
+  useEffect(() => { if(loaded) saveData("3dp2_orders",    orders);    }, [orders,    loaded]);
+  useEffect(() => { if(loaded) saveData("3dp2_filaments", filaments);  }, [filaments, loaded]);
+  useEffect(() => { if(loaded) saveData("3dp3_points",    points);     }, [points,    loaded]);
+
+  if (!loaded) return (
+    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#F7F8FA" }}>
+      <div style={{ textAlign:"center", color:"#555" }}><div style={{ fontSize:40 }}>🖨</div><div style={{ marginTop:12 }}>Загрузка...</div></div>
+    </div>
+  );
+
+  // Сводные финансы по выданным заказам
+  const doneOrders   = orders.filter(o => o.status === "Выдан");
+  const totalRevenue = doneOrders.reduce((s,o) => s + calcOrder(o,filaments).revenue, 0);
+  const totalCost    = doneOrders.reduce((s,o) => s + calcOrder(o,filaments).cost, 0);
+  const pointOrdersRevenue = points.reduce((s,p) => s + (p.pointOrders||[]).reduce((a,o) => a + (o.price||0), 0), 0);
+  const pointOrdersCost    = points.reduce((s,p) => s + (p.pointOrders||[]).reduce((a,o) => a + (o.cost||0), 0), 0);
+  const netProfit    = (totalRevenue - totalCost) + (pointOrdersRevenue - pointOrdersCost);
+  const activeOrders = orders.filter(o => ["Новый","В работе"].includes(o.status)).length;
+  const lowFilament  = filaments.filter(f => f.stock < 200).length;
+  const totalItems   = points.reduce((s,p) => s + (p.keychains||[]).reduce((a,k) => a + Math.max(0,(k.qty||0)-(k.sold||0)), 0), 0);
+
+  const TABS = [
+    { key:"ai",        label:"🤖 Новий заказ" },
+    { key:"orders",    label:"📦 Заказы" },
+    { key:"calc",      label:"🧮 Калькулятор" },
+    { key:"filament",  label:"🎞 Філамент" },
+    { key:"points",    label:"☕ Точки" },
+    { key:"dashboard", label:"📊 Зведення" },
+  ];
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#F7F8FA", fontFamily:"'Segoe UI',system-ui,sans-serif", color:"#1a1a2e" }}>
+      <div style={{ background:"linear-gradient(135deg,#1a1a2e 0%,#16213e 60%,#0f3460 100%)", padding:"16px 24px", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+        <span style={{ fontSize:28 }}>🖨</span>
+        <div>
+          <div style={{ color:"#fff", fontWeight:700, fontSize:18 }}>3D Print Manager</div>
+          <div style={{ color:"#a0aec0", fontSize:12 }}>Управление бизнесом &nbsp;<span style={{ color:"#2ECC71" }}>● сохранено</span></div>
+        </div>
+        <div style={{ marginLeft:"auto", display:"flex", gap:6, flexWrap:"wrap" }}>
+          {TABS.map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)} style={{
+              background: tab===t.key ? "#e94560" : "rgba(255,255,255,0.08)",
+              color: tab===t.key ? "#fff" : "#a0aec0",
+              border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", fontSize:13, fontWeight:600,
+            }}>{t.label}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{ padding:"24px 20px", maxWidth:1100, margin:"0 auto" }}>
+        {tab==="dashboard" && <Dashboard orders={orders} filaments={filaments} points={points} totalRevenue={totalRevenue} totalCost={totalCost} netProfit={netProfit} pointOrdersRevenue={pointOrdersRevenue} pointOrdersCost={pointOrdersCost} activeOrders={activeOrders} lowFilament={lowFilament} totalItems={totalItems} calcOrder={calcOrder}/>}
+        {tab==="ai"        && <AIOrder orders={orders} setOrders={setOrders} filaments={filaments} calcOrder={calcOrder} setTab={setTab} setPrefill={setPrefill}/>}
+        {tab==="orders"    && <Orders    orders={orders} setOrders={setOrders} filaments={filaments} calcOrder={calcOrder}/>}
+        {tab==="calc"      && <Calculator filaments={filaments} prefill={prefill} setPrefill={setPrefill} setOrders={setOrders}/>}
+        {tab==="filament"  && <FilamentTab filaments={filaments} setFilaments={setFilaments}/>}
+        {tab==="points"    && <PointsTab  points={points} setPoints={setPoints}/>}
+      </div>
+    </div>
+  );
+}
+
+// ── DASHBOARD ──────────────────────────────────────────────────────────────────
+function Dashboard({ orders, filaments, points, totalRevenue, totalCost, netProfit, pointOrdersRevenue, pointOrdersCost, activeOrders, lowFilament, totalItems, calcOrder }) {
+  const [period, setPeriod] = useState("month"); // week | month | year | all
+  const byStatus  = Object.keys(STATUS_COLORS).map(s => ({ s, n: orders.filter(o=>o.status===s).length }));
+  const recent    = [...orders].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
+  const withModel = orders.filter(o=>o.hasModel && o.status==="Выдан").length;
+
+  // ── Period filter ──
+  const now = new Date();
+  const periodStart = {
+    week:  new Date(now.getFullYear(), now.getMonth(), now.getDate()-6).toISOString().slice(0,10),
+    month: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0,10),
+    year:  new Date(now.getFullYear(), 0, 1).toISOString().slice(0,10),
+    all:   "2000-01-01",
+  }[period];
+
+  const periodOrders = orders.filter(o => o.status==="Выдан" && o.date >= periodStart);
+  const periodRev    = periodOrders.reduce((s,o) => s + calcOrder(o,filaments).revenue, 0);
+  const periodCost   = periodOrders.reduce((s,o) => s + calcOrder(o,filaments).cost, 0);
+  const periodPtRev  = points.reduce((s,p) => s + (p.pointOrders||[]).filter(o=>o.date>=periodStart).reduce((a,o)=>a+(o.price||0),0), 0);
+  const periodPtCost = points.reduce((s,p) => s + (p.pointOrders||[]).filter(o=>o.date>=periodStart).reduce((a,o)=>a+(o.cost||0),0), 0);
+  const periodProfit = (periodRev - periodCost) + (periodPtRev - periodPtCost);
+
+  // ── Chart: last 6 months revenue ──
+  const months = Array.from({length:6}, (_,i) => {
+    const d = new Date(now.getFullYear(), now.getMonth()-5+i, 1);
+    return { key: d.toISOString().slice(0,7), label: d.toLocaleString("uk",{month:"short"}) };
+  });
+  const monthData = months.map(m => {
+    const rev = orders.filter(o=>o.status==="Выдан"&&o.date.startsWith(m.key)).reduce((s,o)=>s+calcOrder(o,filaments).revenue,0)
+              + points.reduce((s,p)=>(p.pointOrders||[]).filter(o=>o.date.startsWith(m.key)).reduce((a,o)=>a+(o.price||0),s),0);
+    const cost= orders.filter(o=>o.status==="Выдан"&&o.date.startsWith(m.key)).reduce((s,o)=>s+calcOrder(o,filaments).cost,0)
+              + points.reduce((s,p)=>(p.pointOrders||[]).filter(o=>o.date.startsWith(m.key)).reduce((a,o)=>a+(o.cost||0),s),0);
+    return { ...m, rev, profit: rev-cost };
+  });
+  const maxRev = Math.max(...monthData.map(m=>m.rev), 1);
+
+  // ── Best selling keychains ──
+  const kcSales = {};
+  points.forEach(p => (p.keychains||[]).forEach(k => {
+    kcSales[k.name] = (kcSales[k.name]||0) + (k.sold||0);
+  }));
+  const topKc = Object.entries(kcSales).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+  const PERIODS = [["week","Тиждень"],["month","Місяць"],["year","Рік"],["all","Весь час"]];
+
+  return (
+    <div>
+      <h2 style={h2}>📊 Зведення</h2>
+
+      {/* Period selector */}
+      <div style={{ display:"flex", gap:6, marginBottom:20, flexWrap:"wrap" }}>
+        {PERIODS.map(([k,l])=>(
+          <button key={k} onClick={()=>setPeriod(k)} style={{
+            background: period===k?"#e94560":"#fff", color: period===k?"#fff":"#555",
+            border:"1px solid #e0e0e0", borderRadius:20, padding:"6px 16px", cursor:"pointer", fontWeight:600, fontSize:13
+          }}>{l}</button>
+        ))}
+      </div>
+
+      {/* Period stats */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:20 }}>
+        {[
+          { label:"Виручка", value:`${fmt(periodRev+periodPtRev)} грн`, color:"#3498DB", bg:"#e8f4fd" },
+          { label:"Витрати", value:`${fmt(periodCost+periodPtCost)} грн`, color:"#E74C3C", bg:"#fdecea" },
+          { label:"Прибуток", value:`${fmt(periodProfit)} грн`, color: periodProfit>=0?"#27ae60":"#e74c3c", bg: periodProfit>=0?"#f0fff4":"#fdecea" },
+          { label:"Заказів", value:periodOrders.length, color:"#9B59B6", bg:"#f5f0ff" },
+        ].map(s=>(
+          <div key={s.label} style={{ background:s.bg, borderRadius:12, padding:"14px 16px" }}>
+            <div style={{ fontSize:11, color:"#888", marginBottom:4 }}>{s.label}</div>
+            <div style={{ fontSize:20, fontWeight:800, color:s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Revenue chart */}
+      <div style={{ background:"#fff", borderRadius:14, padding:20, boxShadow:"0 2px 8px #0001", marginBottom:20 }}>
+        <div style={{ fontWeight:700, fontSize:14, color:"#0f3460", marginBottom:16 }}>📈 Виручка за 6 місяців</div>
+        <div style={{ display:"flex", alignItems:"flex-end", gap:8, height:120 }}>
+          {monthData.map(m=>(
+            <div key={m.key} style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:4 }}>
+              <div style={{ fontSize:10, color:"#888", fontWeight:600 }}>{m.rev>0?fmt(m.rev):""}</div>
+              <div style={{ width:"100%", display:"flex", flexDirection:"column", justifyContent:"flex-end", height:90, gap:2 }}>
+                <div style={{ width:"100%", background:"#2ECC71", borderRadius:"4px 4px 0 0",
+                  height: m.rev>0 ? `${Math.max(4,(m.profit/maxRev)*90)}px` : "2px", opacity: m.rev>0?1:0.2 }}/>
+                <div style={{ width:"100%", background:"#3498DB", borderRadius:"4px 4px 0 0",
+                  height: `${Math.max(4,(m.rev/maxRev)*90)}px`, opacity: m.rev>0?0.3:0.1 }}/>
+              </div>
+              <div style={{ fontSize:11, color:"#888" }}>{m.label}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display:"flex", gap:16, marginTop:10, fontSize:11, color:"#888" }}>
+          <span><span style={{display:"inline-block",width:10,height:10,background:"#3498DB",borderRadius:2,marginRight:4}}/>Виручка</span>
+          <span><span style={{display:"inline-block",width:10,height:10,background:"#2ECC71",borderRadius:2,marginRight:4}}/>Прибуток</span>
+        </div>
+      </div>
+
+      {/* Top keychains + status grid */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:20, marginBottom:20 }}>
+        <Card title="🏆 Топ брелки в точках">
+          {topKc.length===0
+            ? <div style={{ color:"#bbb", fontSize:13 }}>Ще немає продажів</div>
+            : topKc.map(([name,sold],i)=>(
+              <div key={name} style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 0", borderBottom:"1px solid #f0f0f0" }}>
+                <span style={{ fontSize:16, minWidth:24 }}>{["🥇","🥈","🥉","4️⃣","5️⃣"][i]}</span>
+                <span style={{ flex:1, fontSize:13 }}>{name}</span>
+                <strong style={{ color:"#e94560" }}>{sold} шт</strong>
+              </div>
+            ))
+          }
+        </Card>
+        <Card title="Закази по статусу">
+          {byStatus.map(({s,n}) => (
+            <div key={s} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #f0f0f0" }}>
+              <StatusBadge s={s}/><strong>{n}</strong>
+            </div>
+          ))}
+        </Card>
+      </div>
+
+      {/* Total all time */}
+      <div style={{ background:"linear-gradient(135deg,#0f3460,#16213e)", borderRadius:16, padding:20, color:"#fff", marginBottom:20 }}>
+        <div style={{ fontSize:12, color:"#a0aec0", marginBottom:12, fontWeight:600, letterSpacing:1, textTransform:"uppercase" }}>Всього за весь час</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:12 }}>
+          {[
+            { label:"Виручка",       value:`${fmt(totalRevenue+pointOrdersRevenue)} грн`, color:"#3498DB" },
+            { label:"Витрати",       value:`${fmt(totalCost+pointOrdersCost)} грн`,        color:"#E74C3C" },
+            { label:"Чистий прибуток",value:`${fmt(netProfit)} грн`,                       color:"#2ECC71" },
+            { label:"Заказів виконано",value:orders.filter(o=>o.status==="Выдан").length,  color:"#9B59B6" },
+          ].map(s=>(
+            <div key={s.label} style={{ background:"rgba(255,255,255,0.07)", borderRadius:10, padding:"12px 14px", borderTop:`3px solid ${s.color}` }}>
+              <div style={{ fontSize:10, color:"#a0aec0" }}>{s.label}</div>
+              <div style={{ fontSize:18, fontWeight:800, color:s.color }}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <Card title="Останні закази">
+        {recent.map(o => {
+          const c = calcOrder(o, filaments);
+          return (
+            <div key={o.id} style={{ padding:"6px 0", borderBottom:"1px solid #f0f0f0" }}>
+              <div style={{ display:"flex", justifyContent:"space-between" }}>
+                <span style={{ fontSize:13 }}>{o.client} — {o.item}</span>
+                <strong style={{ color:"#0f3460" }}>{fmt(c.revenue)} грн</strong>
+              </div>
+              {o.hasModel && <div style={{ fontSize:11, color:"#9B59B6" }}>📐 модель {o.modelHours}ч × {o.modelRate} грн/ч</div>}
+            </div>
+          );
+        })}
+      </Card>
+    </div>
+  );
+}
+
+// ── ORDERS ─────────────────────────────────────────────────────────────────────
+function Orders({ orders, setOrders, filaments, calcOrder }) {
+  const [search, setSearch]       = useState("");
+  const [filterStatus, setFilter] = useState("Все");
+  const [showForm, setShowForm]   = useState(false);
+  const [editing, setEditing]     = useState(null);
+  const emptyForm = { client:"", phone:"", item:"", grams:"", printHours:"", price:"", hasModel:false, modelHours:"", modelRate:100, status:"Новый", date:today(), filament:filaments[0]?.name||"", note:"" };
+  const [form, setForm] = useState(emptyForm);
+
+  const filtered = orders.filter(o => {
+    const q = search.toLowerCase();
+    return (!q || o.client.toLowerCase().includes(q) || o.item.toLowerCase().includes(q) || o.phone.includes(q))
+      && (filterStatus==="Все" || o.status===filterStatus);
+  });
+
+  const openNew  = () => { setEditing(null); setForm(emptyForm); setShowForm(true); };
+  const openEdit = (o) => { setEditing(o.id); setForm({...o}); setShowForm(true); };
+  const save = () => {
+    if(!form.client||!form.item) return alert("Заполните клиента и изделие");
+    if(editing) setOrders(prev=>prev.map(o=>o.id===editing?{...form,id:editing}:o));
+    else        setOrders(prev=>[{...form,id:uid()},...prev]);
+    setShowForm(false);
+  };
+  const [confirmDel, setConfirmDel] = useState(null);
+  const del = (id) => setConfirmDel(id);
+  const doDelete = () => { setOrders(prev=>prev.filter(o=>o.id!==confirmDel)); setConfirmDel(null); };
+
+  // Предпросмотр итогов в форме
+  const preview = calcOrder(form, filaments);
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 }}>
+        <h2 style={h2}>📦 Закази</h2>
+        <button onClick={openNew} style={btnPrimary}>+ Новий заказ</button>
+      </div>
+      <div style={{ display:"flex", gap:10, marginBottom:16, flexWrap:"wrap" }}>
+        <input placeholder="🔍 Пошук..." value={search} onChange={e=>setSearch(e.target.value)} style={{...inputStyle,flex:1,minWidth:180}}/>
+        <select value={filterStatus} onChange={e=>setFilter(e.target.value)} style={inputStyle}>
+          <option>Все</option>
+          {Object.keys(STATUS_COLORS).map(s=><option key={s}>{s}</option>)}
+        </select>
+      </div>
+
+      {showForm && (
+        <div style={modalOverlay}>
+          <div style={modalBox}>
+            <h3 style={{ margin:"0 0 16px", color:"#0f3460" }}>{editing?"Редагувати":"Новий"} заказ</h3>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <Field label="Клієнт *"       value={form.client}     onChange={v=>setForm(f=>({...f,client:v}))}/>
+              <Field label="Телефон"        value={form.phone}      onChange={v=>setForm(f=>({...f,phone:v}))} placeholder="+380..."/>
+              <div style={{ gridColumn:"1/-1" }}>
+                <Field label="Виріб / опис *" value={form.item}    onChange={v=>setForm(f=>({...f,item:v}))}/>
+              </div>
+              <div>
+                <label style={labelStyle}>Статус</label>
+                <select value={form.status} onChange={e=>setForm(f=>({...f,status:e.target.value}))} style={{...inputStyle,width:"100%"}}>
+                  {Object.keys(STATUS_COLORS).map(s=><option key={s}>{s}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={labelStyle}>Філамент</label>
+                <select value={form.filament} onChange={e=>setForm(f=>({...f,filament:e.target.value}))} style={{...inputStyle,width:"100%"}}>
+                  {filaments.map(fl=><option key={fl.id}>{fl.name}</option>)}
+                </select>
+              </div>
+              <Field label="Грамів (г)"       type="number" value={form.grams}      onChange={v=>setForm(f=>({...f,grams:v}))}/>
+              <Field label="Годин друку"       type="number" value={form.printHours} onChange={v=>setForm(f=>({...f,printHours:v}))} placeholder="0.5"/>
+              <Field label="Ціна за друк (грн)"type="number" value={form.price}      onChange={v=>setForm(f=>({...f,price:v}))}/>
+              <Field label="Дата"              type="date"   value={form.date}       onChange={v=>setForm(f=>({...f,date:v}))}/>
+              <div style={{ gridColumn:"1/-1" }}>
+                <Field label="Нотатка" value={form.note} onChange={v=>setForm(f=>({...f,note:v}))}/>
+              </div>
+            </div>
+
+            {/* Блок разработки модели */}
+            <div style={{ marginTop:4, marginBottom:12, border:"1px solid #e8e0f5", borderRadius:10, padding:14, background: form.hasModel?"#faf5ff":"#fafafa" }}>
+              <label style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer", fontWeight:600, fontSize:14 }}>
+                <input type="checkbox" checked={form.hasModel} onChange={e=>setForm(f=>({...f,hasModel:e.target.checked}))}
+                  style={{ width:18, height:18, accentColor:"#9B59B6", cursor:"pointer" }}/>
+                <span style={{ color: form.hasModel?"#9B59B6":"#888" }}>📐 Потрібна розробка 3D-моделі</span>
+              </label>
+              {form.hasModel && (
+                <div style={{ marginTop:12, display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                  <Field label="Годин на модель" type="number" value={form.modelHours} onChange={v=>setForm(f=>({...f,modelHours:v}))} placeholder="3"/>
+                  <Field label="Ставка (грн/год)" type="number" value={form.modelRate}  onChange={v=>setForm(f=>({...f,modelRate:v}))} placeholder="100"/>
+                  {Number(form.modelHours||0) > 0 && (
+                    <div style={{ gridColumn:"1/-1", background:"#f0ebff", borderRadius:8, padding:"8px 12px", fontSize:13, color:"#6d28d9", fontWeight:600 }}>
+                      💜 Вартість моделі: {Number(form.modelHours||0)} год × {Number(form.modelRate||0)} грн = <strong>{Number(form.modelHours||0)*Number(form.modelRate||0)} грн</strong>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Итоги предпросмотра */}
+            {(Number(form.grams)||Number(form.printHours)||Number(form.price)) ? (
+              <div style={{ background:"linear-gradient(135deg,#0f3460,#16213e)", borderRadius:10, padding:14, color:"#fff", marginBottom:14 }}>
+                <div style={{ fontSize:12, color:"#a0aec0", marginBottom:10, fontWeight:600 }}>ПІДСУМОК ЗАКАЗУ</div>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:10 }}>
+                  {[
+                    ["🎞 Матеріал", `${fmt(preview.matCost)} грн`],
+                    ["⚡ Електрика", `${fmt(preview.elecCost)} грн`],
+                    ["📐 Модель", form.hasModel ? `${fmt(preview.modelCost)} грн` : "—"],
+                  ].map(([l,v])=>(
+                    <div key={l} style={{ background:"rgba(255,255,255,0.08)", borderRadius:8, padding:"8px 10px" }}>
+                      <div style={{ fontSize:10, color:"#a0aec0" }}>{l}</div>
+                      <div style={{ fontSize:14, fontWeight:700 }}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", borderTop:"1px solid rgba(255,255,255,0.1)", paddingTop:10 }}>
+                  <div>
+                    <div style={{ fontSize:11, color:"#a0aec0" }}>Собівартість</div>
+                    <div style={{ fontSize:15, fontWeight:700, color:"#E74C3C" }}>{fmt(preview.cost)} грн</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:11, color:"#a0aec0" }}>Загальна виручка</div>
+                    <div style={{ fontSize:15, fontWeight:700, color:"#3498DB" }}>{fmt(preview.revenue)} грн</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize:11, color:"#a0aec0" }}>Чистий прибуток</div>
+                    <div style={{ fontSize:18, fontWeight:800, color: preview.profit >= 0 ? "#2ECC71" : "#E74C3C" }}>{fmt(preview.profit)} грн</div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            <div style={{ display:"flex", gap:10 }}>
+              <button onClick={save} style={btnPrimary}>💾 Зберегти</button>
+              <button onClick={()=>setShowForm(false)} style={btnSecondary}>Скасувати</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDel && (
+        <div style={modalOverlay}>
+          <div style={{ background:"#fff", borderRadius:14, padding:28, maxWidth:340, width:"90%", textAlign:"center", boxShadow:"0 8px 40px #0004" }}>
+            <div style={{ fontSize:36, marginBottom:10 }}>🗑</div>
+            <div style={{ fontWeight:700, fontSize:16, marginBottom:8 }}>Видалити заказ?</div>
+            <div style={{ color:"#888", fontSize:13, marginBottom:20 }}>Цю дію не можна скасувати</div>
+            <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
+              <button onClick={doDelete} style={{ ...btnPrimary, background:"#e74c3c" }}>Так, видалити</button>
+              <button onClick={()=>setConfirmDel(null)} style={btnSecondary}>Скасувати</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ background:"#fff", borderRadius:12, boxShadow:"0 2px 8px #0001", overflow:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+          <thead>
+            <tr style={{ background:"#f7f8fa", color:"#555" }}>
+              {["Дата","Клієнт","Виріб","Друк","Модель","Виручка","Прибуток","Статус",""].map(h=>(
+                <th key={h} style={{ padding:"10px 12px", textAlign:"left", fontWeight:600, whiteSpace:"nowrap" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length===0
+              ? <tr><td colSpan={9} style={{ textAlign:"center", padding:32, color:"#999" }}>Заказів не знайдено</td></tr>
+              : filtered.map((o,i) => {
+                const c = calcOrder(o, filaments);
+                return (
+                  <tr key={o.id} style={{ borderTop:"1px solid #f0f0f0", background:i%2===0?"#fff":"#fafafa" }}>
+                    <td style={td}>{o.date}</td>
+                    <td style={{...td,fontWeight:600}}>
+                      {o.client}
+                      {o.phone && <div style={{fontSize:11,color:"#999"}}>{o.phone}</div>}
+                    </td>
+                    <td style={td}>
+                      {o.item}
+                      {o.note && <div style={{fontSize:11,color:"#999"}}>{o.note}</div>}
+                    </td>
+                    <td style={td}>{o.grams}г / {o.printHours}ч<div style={{fontSize:11,color:"#999"}}>{o.filament}</div></td>
+                    <td style={td}>
+                      {o.hasModel
+                        ? <span style={{ background:"#f0ebff", color:"#9B59B6", borderRadius:20, padding:"2px 8px", fontSize:11, fontWeight:600, whiteSpace:"nowrap" }}>📐 {o.modelHours}ч × {o.modelRate} = {fmt(c.modelCost)} грн</span>
+                        : <span style={{ color:"#ccc" }}>—</span>
+                      }
+                    </td>
+                    <td style={{...td, fontWeight:700, color:"#0f3460"}}>{fmt(c.revenue)} грн</td>
+                    <td style={{...td, fontWeight:700, color: c.profit>=0?"#27ae60":"#e74c3c"}}>{fmt(c.profit)} грн</td>
+                    <td style={td}>
+                      <select value={o.status} onChange={e=>setOrders(prev=>prev.map(x=>x.id===o.id?{...x,status:e.target.value}:x))}
+                        style={{ border:`2px solid ${STATUS_COLORS[o.status]?.bg||"#eee"}`, background:STATUS_COLORS[o.status]?.bg||"#f5f5f5",
+                          color:STATUS_COLORS[o.status]?.text||"#333", borderRadius:20, padding:"3px 10px", fontSize:12,
+                          fontWeight:600, cursor:"pointer", outline:"none" }}>
+                        {Object.keys(STATUS_COLORS).map(s=><option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </td>
+                    <td style={td}>
+                      <button onClick={()=>openEdit(o)} style={btnIcon}>✏️</button>
+                      <button onClick={()=>del(o.id)}   style={btnIcon}>🗑</button>
+                    </td>
+                  </tr>
+                );
+              })
+            }
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop:8, color:"#888", fontSize:13 }}>Показано: {filtered.length} з {orders.length}</div>
+    </div>
+  );
+}
+
+// ── CALCULATOR ──────────────────────────────────────────────────────────────────
+function Calculator({ filaments, prefill, setPrefill, setOrders }) {
+  const [grams,      setGrams]      = useState(20);
+  const [printHours, setPrintHours] = useState(1);
+  const [filIdx,     setFilIdx]     = useState(0);
+  const [markup,     setMarkup]     = useState(100);
+  const [elec,       setElec]       = useState(4.5);
+  const [hasModel,   setHasModel]   = useState(false);
+  const [modelHours, setModelHours] = useState(3);
+  const [modelRate,  setModelRate]  = useState(100);
+  const [added, setAdded]           = useState(false);
+
+  // When prefill arrives from AI, load client info
+  const { useState: _, useEffect } = { useState, useEffect: (fn, deps) => { } };
+
+  // Apply prefill on mount
+  const [clientInfo, setClientInfo] = useState(null);
+  if (prefill && !clientInfo) {
+    setClientInfo(prefill);
+    const fi = filaments.findIndex(f => f.name === prefill.filament);
+    if (fi >= 0) setFilIdx(fi);
+    setHasModel(prefill.hasModel || false);
+    setPrefill(null);
+  }
+
+  const fil        = filaments[filIdx]||{cost:0.28};
+  const matCost    = grams * fil.cost;
+  const elecCost   = printHours * elec;
+  const modelCost  = hasModel ? modelHours * modelRate : 0;
+  const printCost  = matCost + elecCost;
+  const printPrice = printCost * (1 + markup/100);
+  const totalPrice = printPrice + modelCost;
+  const profit     = totalPrice - printCost;
+
+  const addOrder = () => {
+    const newOrder = {
+      id:         uid(),
+      client:     clientInfo?.client || "",
+      phone:      clientInfo?.phone  || "",
+      item:       clientInfo?.item   || "",
+      grams,
+      printHours,
+      price:      Math.round(printPrice),
+      hasModel,
+      modelHours: hasModel ? modelHours : 0,
+      modelRate,
+      status:     "Новый",
+      date:       today(),
+      filament:   fil.name,
+      note:       [clientInfo?.deadline ? `Термін: ${clientInfo.deadline}` : "", clientInfo?.note || ""].filter(Boolean).join(" | "),
+    };
+    setOrders(prev => [newOrder, ...prev]);
+    setAdded(true);
+    setTimeout(() => setAdded(false), 3000);
+  };
+
+  return (
+    <div>
+      <h2 style={h2}>🧮 Калькулятор</h2>
+
+      {/* Client info banner if came from AI */}
+      {clientInfo && (
+        <div style={{ background:"linear-gradient(135deg,#f0ebff,#e8f4fd)", borderRadius:12, padding:"14px 18px", marginBottom:20, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
+          <div>
+            <div style={{ fontSize:12, color:"#9B59B6", fontWeight:700, marginBottom:4 }}>🤖 Заказ від клієнта</div>
+            <div style={{ fontWeight:700, fontSize:15 }}>{clientInfo.client} {clientInfo.phone && <span style={{color:"#888",fontWeight:400,fontSize:13}}>· {clientInfo.phone}</span>}</div>
+            <div style={{ fontSize:13, color:"#555", marginTop:2 }}>{clientInfo.item}</div>
+            {clientInfo.deadline && <div style={{ fontSize:12, color:"#F39C12", marginTop:2 }}>📅 {clientInfo.deadline}</div>}
+          </div>
+          <button onClick={()=>setClientInfo(null)} style={{ background:"none", border:"1px solid #ddd", borderRadius:8, padding:"4px 12px", cursor:"pointer", fontSize:12, color:"#888" }}>✕ Очистити</button>
+        </div>
+      )}
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:20 }}>
+        <Card title="Параметри друку">
+          <Slider label="Грамів філаменту"    value={grams}      min={1}   max={500} onChange={setGrams}      unit="г"/>
+          <Slider label="Годин друку"          value={printHours} min={0.1} max={48}  step={0.1} onChange={setPrintHours} unit="год"/>
+          <Slider label="Електрика (грн/год)" value={elec}       min={1}   max={20}  step={0.5} onChange={setElec}       unit="грн/год"/>
+          <Slider label="Наценка на друк"      value={markup}     min={0}   max={500} step={5}   onChange={setMarkup}     unit="%"/>
+          <div style={{ marginTop:12 }}>
+            <label style={labelStyle}>Філамент</label>
+            <select value={filIdx} onChange={e=>setFilIdx(+e.target.value)} style={{...inputStyle,width:"100%"}}>
+              {filaments.map((f,i)=><option key={f.id} value={i}>{f.name} ({f.cost} грн/г)</option>)}
+            </select>
+          </div>
+        </Card>
+
+        <div>
+          <Card title="Розробка 3D-моделі">
+            <label style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:14, fontWeight:600 }}>
+              <input type="checkbox" checked={hasModel} onChange={e=>setHasModel(e.target.checked)}
+                style={{ width:18, height:18, accentColor:"#9B59B6", cursor:"pointer" }}/>
+              <span style={{ color:hasModel?"#9B59B6":"#888" }}>Замовили розробку моделі</span>
+            </label>
+            {hasModel ? (
+              <>
+                <Slider label="Годин на модель"  value={modelHours} min={0.5} max={40}  step={0.5} onChange={setModelHours} unit="год"/>
+                <Slider label="Ставка за годину" value={modelRate}  min={50}  max={500} step={50}  onChange={setModelRate}  unit="грн/год"/>
+                <div style={{ background:"#f0ebff", borderRadius:8, padding:"10px 14px", fontSize:14, color:"#6d28d9", fontWeight:600, marginTop:4 }}>
+                  💜 Вартість моделі: {modelHours} × {modelRate} = <strong>{modelHours*modelRate} грн</strong>
+                </div>
+              </>
+            ) : (
+              <div style={{ color:"#bbb", fontSize:13, padding:"20px 0", textAlign:"center" }}>
+                Включіть, якщо потрібна розробка моделі під замовлення
+              </div>
+            )}
+          </Card>
+        </div>
+      </div>
+
+      {/* Результат */}
+      <div style={{ marginTop:20, background:"linear-gradient(135deg,#0f3460,#16213e)", borderRadius:16, padding:24, color:"#fff" }}>
+        <div style={{ fontSize:12, color:"#a0aec0", marginBottom:14, fontWeight:600, letterSpacing:1, textTransform:"uppercase" }}>Підсумок замовлення</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:12, marginBottom:16 }}>
+          {[
+            ["🎞 Матеріал",     `${fmt(matCost)} грн`,    "#3498DB"],
+            ["⚡ Електрика",    `${fmt(elecCost)} грн`,   "#F39C12"],
+            ["🔧 Собівартість", `${fmt(printCost)} грн`,  "#E74C3C"],
+            ...(hasModel ? [["📐 Модель", `${fmt(modelCost)} грн`, "#9B59B6"]] : []),
+          ].map(([l,v,c])=>(
+            <div key={l} style={{ background:"rgba(255,255,255,0.08)", borderRadius:10, padding:"12px 14px", borderTop:`3px solid ${c}` }}>
+              <div style={{ fontSize:11, color:"#a0aec0" }}>{l}</div>
+              <div style={{ fontSize:16, fontWeight:700 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+          <div style={{ background:"#e94560", borderRadius:12, padding:"16px 20px" }}>
+            <div style={{ fontSize:12, color:"#ffc", marginBottom:4 }}>
+              Ціна клієнту {hasModel ? "(друк + модель)" : `(наценка ${markup}%)`}
+            </div>
+            <div style={{ fontSize:28, fontWeight:800 }}>{fmt(totalPrice)} грн</div>
+            {hasModel && <div style={{ fontSize:12, color:"rgba(255,255,255,0.7)", marginTop:4 }}>Друк {fmt(printPrice)} + Модель {fmt(modelCost)}</div>}
+          </div>
+          <div style={{ background:"rgba(46,204,113,0.15)", border:"2px solid #2ECC71", borderRadius:12, padding:"16px 20px" }}>
+            <div style={{ fontSize:12, color:"#a0aec0", marginBottom:4 }}>Ваш чистий прибуток</div>
+            <div style={{ fontSize:28, fontWeight:800, color:"#2ECC71" }}>{fmt(profit)} грн</div>
+            <div style={{ fontSize:11, color:"#6b7a99", marginTop:4 }}>виручка − собівартість</div>
+          </div>
+        </div>
+        <button onClick={addOrder} style={{ width:"100%", background: added?"#27ae60":"#e94560", border:"none", borderRadius:12, padding:"14px", color:"#fff", fontSize:16, fontWeight:700, cursor:"pointer", transition:"background .2s" }}>
+          {added ? "✅ Заказ додано в список!" : clientInfo ? `✅ Додати заказ для ${clientInfo.client}` : "✅ Додати заказ"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── FILAMENT ───────────────────────────────────────────────────────────────────
+function FilamentTab({ filaments, setFilaments }) {
+  const [newName, setNewName] = useState("");
+  const [adding, setAdding]   = useState(false);
+
+  const updateCost = (id, val) => {
+    const v = parseFloat(val);
+    if(isNaN(v) || v <= 0) return;
+    setFilaments(prev => prev.map(f => f.id===id ? {...f, cost: v} : f));
+  };
+
+  const del = (id) => setFilaments(prev => prev.filter(f => f.id !== id));
+
+  const addFilament = () => {
+    if(!newName.trim()) return;
+    setFilaments(prev => [...prev, { id: uid(), name: newName.trim(), color: "#aaa", stock: 1000, cost: 0.28 }]);
+    setNewName(""); setAdding(false);
+  };
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+        <h2 style={h2}>🎞 Філамент</h2>
+        <button onClick={()=>setAdding(a=>!a)} style={btnPrimary}>+ Додати</button>
+      </div>
+
+      {adding && (
+        <div style={{ background:"#fff", borderRadius:12, padding:16, marginBottom:16, boxShadow:"0 2px 8px #0001", display:"flex", gap:10, alignItems:"flex-end" }}>
+          <div style={{ flex:1 }}>
+            <label style={labelStyle}>Назва філаменту</label>
+            <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="напр. PLA Білий"
+              style={{...inputStyle, width:"100%"}} onKeyDown={e=>e.key==="Enter"&&addFilament()}/>
+          </div>
+          <button onClick={addFilament} style={btnPrimary}>Додати</button>
+          <button onClick={()=>setAdding(false)} style={btnSecondary}>✕</button>
+        </div>
+      )}
+
+      <div style={{ background:"#fff", borderRadius:12, boxShadow:"0 2px 8px #0001", overflow:"hidden" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:14 }}>
+          <thead>
+            <tr style={{ background:"#f7f8fa" }}>
+              <th style={{ padding:"12px 16px", textAlign:"left", fontWeight:600, color:"#555" }}>Філамент</th>
+              <th style={{ padding:"12px 16px", textAlign:"left", fontWeight:600, color:"#555" }}>Ціна за грам</th>
+              <th style={{ padding:"12px 16px", textAlign:"left", fontWeight:600, color:"#555" }}>Ціна за кг</th>
+              <th style={{ padding:"12px 16px" }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filaments.map((f, i) => (
+              <tr key={f.id} style={{ borderTop:"1px solid #f0f0f0", background: i%2===0?"#fff":"#fafafa" }}>
+                <td style={{ padding:"12px 16px", fontWeight:600 }}>{f.name}</td>
+                <td style={{ padding:"12px 16px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <input
+                      type="number" step="0.01" min="0.01"
+                      defaultValue={f.cost}
+                      onBlur={e => updateCost(f.id, e.target.value)}
+                      style={{ ...inputStyle, width:90, padding:"6px 10px", fontSize:14, fontWeight:600, color:"#0f3460" }}
+                    />
+                    <span style={{ color:"#888", fontSize:13 }}>грн/г</span>
+                  </div>
+                </td>
+                <td style={{ padding:"12px 16px", color:"#888", fontSize:13 }}>
+                  {fmt(f.cost * 1000)} грн/кг
+                </td>
+                <td style={{ padding:"12px 16px", textAlign:"right" }}>
+                  <button onClick={()=>del(f.id)} style={btnIcon}>🗑</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop:10, fontSize:12, color:"#aaa" }}>Ціна змінюється після кліку поза полем (Tab або Enter)</div>
+    </div>
+  );
+}
+
+// ── POINTS ─────────────────────────────────────────────────────────────────────
+function PointsTab({ points, setPoints }) {
+  const [profile, setProfile] = useState(null); // id of open profile
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId]    = useState(null);
+  const emptyPt = { name:"", address:"", instagram:"", telegram:"", phone:"", note:"", type:"consignment" }; // consignment=реалізація, buyout=викуп
+  const [form, setForm] = useState(emptyPt);
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  const save = () => {
+    if(!form.name) return;
+    if(editId) setPoints(prev=>prev.map(p=>p.id===editId?{...p,...form}:p));
+    else       setPoints(prev=>[...prev,{...form, id:uid(), keychains:[], payments:[], pointOrders:[], instagram:form.instagram||'', telegram:form.telegram||'', phone:form.phone||'', note:form.note||'', type:form.type||'consignment'}]);
+    setShowForm(false); setEditId(null);
+  };
+  const del = () => { setPoints(prev=>prev.filter(p=>p.id!==confirmDel)); setConfirmDel(null); if(profile===confirmDel) setProfile(null); };
+
+  const openProfile = (id) => setProfile(id);
+  const pt = points.find(p=>p.id===profile);
+
+  // helpers
+  const kc           = (p) => p.keychains || [];
+  const pays         = (p) => p.payments  || [];
+  const totalStock   = (p) => kc(p).reduce((s,k)=>s+k.qty,0);
+  const totalSold    = (p) => kc(p).reduce((s,k)=>s+k.sold,0);
+  const totalInStock = (p) => kc(p).reduce((s,k)=>s+(k.qty-k.sold)*k.price,0);
+  const totalUnpaid  = (p) => kc(p).reduce((s,k)=>s+k.sold*k.price,0) - pays(p).reduce((s,pay)=>s+pay.amount,0);
+  const totalEarned  = (p) => pays(p).reduce((s,pay)=>s+pay.amount,0);
+  const thisMonth    = (p) => { const m=new Date().toISOString().slice(0,7); return pays(p).filter(pay=>pay.date.startsWith(m)).reduce((s,pay)=>s+pay.amount,0); };
+
+  if (profile && pt) return <PointProfile pt={pt} setPoints={setPoints} onBack={()=>setProfile(null)}
+    totalStock={totalStock} totalSold={totalSold} totalInStock={totalInStock}
+    totalUnpaid={totalUnpaid} totalEarned={totalEarned} thisMonth={thisMonth}/>;
+
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:20 }}>
+        <h2 style={h2}>☕ Точки продажу</h2>
+        <div style={{ display:"flex", gap:8 }}>
+          <button onClick={()=>{ if(window.confirm && window.confirm("Скинути всі точки до нуля?")) { setPoints([]); } else { setPoints([]); } }} 
+            style={{ ...btnSecondary, fontSize:12, padding:"6px 12px", color:"#e74c3c" }}>🗑 Скинути</button>
+          <button onClick={()=>{setEditId(null);setForm(emptyPt);setShowForm(true)}} style={btnPrimary}>+ Додати точку</button>
+        </div>
+      </div>
+
+      {showForm && (
+        <div style={modalOverlay}>
+          <div style={modalBox}>
+            <h3 style={{ margin:"0 0 16px", color:"#0f3460" }}>{editId?"Редагувати":"Нова"} точка</h3>
+            <Field label="Назва *"    value={form.name}      onChange={v=>setForm(f=>({...f,name:v}))}/>
+            <Field label="Адреса"     value={form.address}   onChange={v=>setForm(f=>({...f,address:v}))}/>
+            <div style={{ marginBottom:10 }}>
+              <label style={labelStyle}>Тип співпраці</label>
+              <div style={{ display:"flex", gap:8 }}>
+                <button type="button" onClick={()=>setForm(f=>({...f,type:"consignment"}))} style={{
+                  flex:1, padding:"10px", border:`2px solid ${form.type!=="buyout"?"#e94560":"#e0e0e0"}`,
+                  borderRadius:10, cursor:"pointer", background:form.type!=="buyout"?"#fff5f7":"#fafafa",
+                  color:form.type!=="buyout"?"#e94560":"#888", fontWeight:600, fontSize:13
+                }}>🔄 На реалізацію<div style={{fontSize:11,fontWeight:400,marginTop:2}}>платять за продане</div></button>
+                <button type="button" onClick={()=>setForm(f=>({...f,type:"buyout"}))} style={{
+                  flex:1, padding:"10px", border:`2px solid ${form.type==="buyout"?"#27ae60":"#e0e0e0"}`,
+                  borderRadius:10, cursor:"pointer", background:form.type==="buyout"?"#f0fff4":"#fafafa",
+                  color:form.type==="buyout"?"#27ae60":"#888", fontWeight:600, fontSize:13
+                }}>💰 Викуп<div style={{fontSize:11,fontWeight:400,marginTop:2}}>платять одразу</div></button>
+              </div>
+            </div>
+            <Field label="Instagram"  value={form.instagram} onChange={v=>setForm(f=>({...f,instagram:v}))} placeholder="@назва"/>
+            <Field label="Telegram"   value={form.telegram}  onChange={v=>setForm(f=>({...f,telegram:v}))} placeholder="@назва"/>
+            <Field label="Телефон"    value={form.phone}     onChange={v=>setForm(f=>({...f,phone:v}))} placeholder="+380..."/>
+            <Field label="Нотатка"    value={form.note}      onChange={v=>setForm(f=>({...f,note:v}))}/>
+            <div style={{ display:"flex", gap:10, marginTop:14 }}>
+              <button onClick={save} style={btnPrimary}>Зберегти</button>
+              <button onClick={()=>setShowForm(false)} style={btnSecondary}>Скасувати</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDel && (
+        <div style={modalOverlay}>
+          <div style={{ background:"#fff", borderRadius:14, padding:28, maxWidth:340, width:"90%", textAlign:"center", boxShadow:"0 8px 40px #0004" }}>
+            <div style={{ fontSize:36, marginBottom:10 }}>🗑</div>
+            <div style={{ fontWeight:700, fontSize:16, marginBottom:8 }}>Видалити точку?</div>
+            <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
+              <button onClick={del} style={{ ...btnPrimary, background:"#e74c3c" }}>Так</button>
+              <button onClick={()=>setConfirmDel(null)} style={btnSecondary}>Скасувати</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:16 }}>
+        {points.map(p => { p = {...p, keychains: p.keychains||[], payments: p.payments||[] };
+          const unpaid = totalUnpaid(p);
+          const inStock = totalInStock(p);
+          return (
+            <div key={p.id} onClick={()=>openProfile(p.id)}
+              style={{ background:"#fff", borderRadius:14, padding:20, boxShadow:"0 2px 10px #0001", cursor:"pointer", transition:"box-shadow .15s, transform .15s" }}
+              onMouseEnter={e=>{e.currentTarget.style.boxShadow="0 6px 24px #0002";e.currentTarget.style.transform="translateY(-2px)"}}
+              onMouseLeave={e=>{e.currentTarget.style.boxShadow="0 2px 10px #0001";e.currentTarget.style.transform="none"}}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                <div>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <span style={{ fontWeight:700, fontSize:17 }}>☕ {p.name}</span>
+                    <span style={{ fontSize:11, fontWeight:600, borderRadius:20, padding:"2px 8px", background:p.type==="buyout"?"#f0fff4":"#fff5f7", color:p.type==="buyout"?"#27ae60":"#e94560" }}>{p.type==="buyout"?"💰 Викуп":"🔄 Реалізація"}</span>
+                  </div>
+                  <div style={{ color:"#888", fontSize:13, marginTop:2 }}>{p.address}</div>
+                </div>
+                <div style={{ display:"flex", gap:4 }} onClick={e=>e.stopPropagation()}>
+                  <button onClick={()=>{setEditId(p.id);setForm({name:p.name,address:p.address,instagram:p.instagram||"",telegram:p.telegram||"",phone:p.phone||"",note:p.note||"",type:p.type||"consignment"});setShowForm(true)}} style={btnIcon}>✏️</button>
+                  <button onClick={()=>setConfirmDel(p.id)} style={btnIcon}>🗑</button>
+                </div>
+              </div>
+              <div style={{ display:"flex", gap:8, marginTop:14, flexWrap:"wrap" }}>
+                {p.instagram && !["—","-",""].includes(p.instagram.trim()) && <span style={{ fontSize:12, background:"#f5f0ff", color:"#9B59B6", borderRadius:20, padding:"2px 10px" }}>📸 {p.instagram}</span>}
+                {p.telegram  && !["—","-",""].includes(p.telegram.trim())  && <span style={{ fontSize:12, background:"#e8f4fd", color:"#1a6fa8", borderRadius:20, padding:"2px 10px" }}>✈️ {p.telegram}</span>}
+                {p.phone     && !["—","-",""].includes(p.phone.trim())     && <span style={{ fontSize:12, background:"#f0fff4", color:"#27ae60", borderRadius:20, padding:"2px 10px" }}>📞 {p.phone}</span>}
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginTop:14 }}>
+                <div style={{ background:"#f7f8fa", borderRadius:10, padding:"10px 12px" }}>
+                  <div style={{ fontSize:11, color:"#888" }}>{p.type==="buyout"?"Всього поставлено":"Брелків в точці"}</div>
+                  <div style={{ fontSize:18, fontWeight:700, color:"#0f3460" }}>{p.type==="buyout" ? totalStock(p)+" шт" : (totalStock(p)-totalSold(p))+" шт"}</div>
+                </div>
+                <div style={{ background: p.type==="buyout"?"#f0fff4": unpaid>0?"#fff8e6":"#f7f8fa", borderRadius:10, padding:"10px 12px" }}>
+                  <div style={{ fontSize:11, color:"#888" }}>{p.type==="buyout"?"Зароблено":"До виплати"}</div>
+                  <div style={{ fontSize:18, fontWeight:700, color: p.type==="buyout"?"#27ae60": unpaid>0?"#e67e22":"#aaa" }}>{p.type==="buyout" ? totalEarned(p)+" грн" : unpaid+" грн"}</div>
+                </div>
+              </div>
+              <div style={{ marginTop:10, fontSize:12, color:"#aaa", textAlign:"center" }}>Натисни щоб відкрити профіль →</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── POINT PROFILE ──────────────────────────────────────────────────────────────
+function PointProfile({ pt, setPoints, onBack, totalStock, totalSold, totalInStock, totalUnpaid, totalEarned, thisMonth }) {
+  const [tab, setTab]           = useState("keychains");
+  const [kcOpen, setKcOpen]     = useState(true);
+  const [kcForm, setKcForm]     = useState({ items:[{name:"",qty:"",price:""}] });
+  const [payForm, setPayForm]   = useState({ amount:"", note:"" });
+  const [payModal, setPayModal] = useState(false);
+  const [inventory, setInventory] = useState({});
+  const [stocktakeMode, setStocktakeMode] = useState(false);
+  const [stocktakeResult, setStocktakeResult] = useState(null);
+  const [poForm, setPoForm]     = useState({ name:"", cost:"", price:"" });
+  const [invoice, setInvoice]   = useState(null); // {newItems, allItems, date}
+
+  // Normalize pt defensively
+  const safePt = { ...pt, keychains: pt.keychains || [], payments: pt.payments || [], pointOrders: pt.pointOrders || [] };
+  const update = (fn) => setPoints(prev=>prev.map(p=>p.id===pt.id ? fn({...p, keychains:p.keychains||[], payments:p.payments||[], pointOrders:p.pointOrders||[]}) : p));
+  const ptKc    = safePt.keychains;
+  const ptPays  = safePt.payments;
+  const ptOrders = safePt.pointOrders;
+
+  const addKeychain = () => {
+    const validItems = kcForm.items.filter(i=>i.name&&i.qty&&i.price);
+    if(validItems.length===0) return;
+    const isBuyout = safePt.type === "buyout";
+    const newItems = validItems.map(i=>({name:i.name, qty:+i.qty, price:+i.price}));
+    const totalAmount = newItems.reduce((s,i)=>s+i.qty*i.price, 0);
+    update(p => {
+      const addedKc = newItems.map(i=>({id:uid(), name:i.name, qty:i.qty, price:i.price, sold:isBuyout?i.qty:0, paid:false}));
+      const newKc = [...(p.keychains||[]), ...addedKc];
+      const newPays = isBuyout
+        ? [...(p.payments||[]), {id:uid(), amount:totalAmount, date:today(), note:`Викуп: ${newItems.map(i=>i.name).join(", ")}`}]
+        : (p.payments||[]);
+      return {...p, keychains: newKc, payments: newPays};
+    });
+    setInvoice({ newItems, date:today(), isBuyout });
+    setKcForm({ items:[{name:"",qty:"",price:""}] });
+  };
+
+  const delKeychain = (kid) => update(p=>({...p, keychains:(p.keychains||[]).filter(k=>k.id!==kid)}));
+
+  const addPayment = () => {
+    if(!payForm.amount) return;
+    update(p=>({...p, payments:[...(p.payments||[]), {id:uid(), amount:+payForm.amount, date:today(), note:payForm.note}]}));
+    setPayForm({amount:"",note:""}); setPayModal(false);
+  };
+
+  const delPayment = (pid) => update(p=>({...p, payments:(p.payments||[]).filter(pay=>pay.id!==pid)}));
+
+  // STOCKTAKE: user enters how many remain, we calc sold diff
+  const calcStocktake = () => {
+    const results = ptKc.map(k => {
+      const remaining = inventory[k.id] !== undefined ? +inventory[k.id] : (k.qty - k.sold);
+      const prevRemaining = k.qty - k.sold;
+      const newlySold = prevRemaining - remaining;
+      return { ...k, remaining, newlySold, newTotal: k.sold + newlySold, amount: newlySold * k.price };
+    }).filter(r => r.newlySold > 0);
+    const totalAmount = results.reduce((s,r)=>s+r.amount,0);
+    setStocktakeResult({ items: results, totalAmount });
+  };
+
+  const confirmStocktake = () => {
+    const r = stocktakeResult;
+    // update sold counts
+    update(p => ({
+      ...p,
+      keychains: (p.keychains||[]).map(k => {
+        const found = r.items.find(i=>i.id===k.id);
+        return found ? {...k, sold: found.newTotal} : k;
+      }),
+      payments: r.totalAmount > 0
+        ? [...(p.payments||[]), {id:uid(), amount:r.totalAmount, date:today(), note:`Переоблік ${today()}`}]
+        : p.payments
+    }));
+    setStocktakeMode(false);
+    setStocktakeResult(null);
+    setInventory({});
+  };
+
+  const unpaid    = totalUnpaid(safePt);
+  const earned    = totalEarned(safePt);
+  const month     = thisMonth(safePt);
+  const inStock   = totalInStock(safePt);
+  const remaining = ptKc.reduce((s,k)=>s+(k.qty-k.sold),0);
+
+  return (
+    <div>
+      <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20, flexWrap:"wrap" }}>
+        <button onClick={onBack} style={{ ...btnSecondary, padding:"7px 14px", fontSize:13 }}>← Назад</button>
+        <div style={{ flex:1 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:10, flexWrap:"wrap" }}>
+            <h2 style={{ ...h2, margin:0 }}>☕ {safePt.name}</h2>
+            <span style={{ fontSize:12, fontWeight:600, borderRadius:20, padding:"3px 10px", background:safePt.type==="buyout"?"#f0fff4":"#fff5f7", color:safePt.type==="buyout"?"#27ae60":"#e94560" }}>{safePt.type==="buyout"?"💰 Викуп":"🔄 Реалізація"}</span>
+          </div>
+          {safePt.address && <div style={{ fontSize:13, color:"#888", marginTop:2 }}>{safePt.address}</div>}
+        </div>
+        <button onClick={()=>{
+          const nowDate = new Date().toISOString().slice(0,10);
+          const kcs = ptKc;
+          const rows = kcs.map((k,i)=>{
+            const rem = k.qty - k.sold;
+            const bg = i%2===0 ? "#fff" : "#fafafa";
+            return '<tr style="background:'+bg+'"><td style="padding:7px 10px">'+k.name+'</td><td style="padding:7px 10px;text-align:center">'+k.qty+'</td><td style="padding:7px 10px;text-align:center">'+k.sold+'</td><td style="padding:7px 10px;text-align:center;font-weight:700;color:#0f3460">'+rem+'</td><td style="padding:7px 10px;text-align:right">'+(rem*k.price)+' грн</td></tr>';
+          }).join("");
+          const total = kcs.reduce((s,k)=>s+(k.qty-k.sold),0);
+          const totalSum = kcs.reduce((s,k)=>s+(k.qty-k.sold)*k.price,0);
+          const ptType = safePt.type==="buyout" ? "Викуп" : "Реалізація";
+          const ptName = safePt.name;
+          const ptAddr = safePt.address || "";
+          const w = window.open("","_blank");
+          if(!w) { alert("Дозвольте спливаючі вікна в браузері"); return; }
+          w.document.write('<!DOCTYPE html><html><head><title>Залишки - '+ptName+'</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#111}h2{color:#0f3460;margin-bottom:8px}p{margin:4px 0;font-size:14px}table{width:100%;border-collapse:collapse;margin-top:14px}th,td{padding:8px 10px;border:1px solid #ddd;font-size:13px}th{background:#f0f0f0;font-weight:600}.total{font-weight:700;background:#e8f8f0}.sign{display:flex;justify-content:space-between;margin-top:36px;font-size:13px;color:#333;border-top:1px dashed #ccc;padding-top:16px}</style></head><body><h2>📄 Накладна залишків</h2><p><strong>Заклад:</strong> '+ptName+(ptAddr?' · '+ptAddr:'')+'</p><p><strong>Дата:</strong> '+nowDate+'&nbsp;&nbsp;<strong>Тип:</strong> '+ptType+'</p><table><thead><tr><th>Брелок</th><th style="text-align:center">Здано</th><th style="text-align:center">Продано</th><th style="text-align:center">Залишок</th><th style="text-align:right">Сума залишку</th></tr></thead><tbody>'+rows+'<tr class="total"><td>РАЗОМ</td><td style="text-align:center">'+kcs.reduce((s,k)=>s+k.qty,0)+'</td><td style="text-align:center">'+kcs.reduce((s,k)=>s+k.sold,0)+'</td><td style="text-align:center;color:#e94560">'+total+'</td><td style="text-align:right;color:#27ae60">'+totalSum+' грн</td></tr></tbody></table><div class="sign"><div>Підтверджую: _______________</div><div>Дата підпису: _______________</div></div></body></html>');
+          w.document.close();
+          setTimeout(()=>w.print(), 300);
+        }} style={{ ...btnSecondary, fontSize:13, padding:"7px 14px", whiteSpace:"nowrap" }}>
+          🖨 Загальна накладна
+        </button>
+      </div>
+
+      <div style={{ display:"flex", gap:8, marginBottom:20, flexWrap:"wrap" }}>
+        {pt.instagram && !["—","-",""].includes((pt.instagram||"").trim()) && <a href={`https://instagram.com/${pt.instagram.replace("@","")}`} target="_blank" rel="noreferrer"
+          style={{ fontSize:13, background:"#f5f0ff", color:"#9B59B6", borderRadius:20, padding:"5px 14px", textDecoration:"none", fontWeight:600 }}>📸 {pt.instagram}</a>}
+        {pt.telegram  && !["—","-",""].includes((pt.telegram||"").trim())  && <a href={`https://t.me/${pt.telegram.replace("@","")}`} target="_blank" rel="noreferrer"
+          style={{ fontSize:13, background:"#e8f4fd", color:"#1a6fa8", borderRadius:20, padding:"5px 14px", textDecoration:"none", fontWeight:600 }}>✈️ {pt.telegram}</a>}
+        {pt.phone     && !["—","-",""].includes((pt.phone||"").trim())     && <a href={`tel:${pt.phone}`}
+          style={{ fontSize:13, background:"#f0fff4", color:"#27ae60", borderRadius:20, padding:"5px 14px", textDecoration:"none", fontWeight:600 }}>📞 {pt.phone}</a>}
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:24 }}>
+        {[
+          { label:"Залишок в точці", value:`${remaining} шт`,     color:"#0f3460", bg:"#e8f4fd" },
+          { label:"Продано всього",  value:`${totalSold(pt)} шт`, color:"#27ae60", bg:"#f0fff4" },
+          { label:"В точці на суму", value:`${inStock} грн`,      color:"#9B59B6", bg:"#f5f0ff" },
+          { label:"До виплати",      value:`${unpaid} грн`,       color:unpaid>0?"#e67e22":"#aaa", bg:unpaid>0?"#fff8e6":"#f7f8fa" },
+          { label:"За цей місяць",   value:`${month} грн`,        color:"#e94560", bg:"#fdecea" },
+          { label:"Всього зароблено",value:`${earned} грн`,       color:"#27ae60", bg:"#f0fff4" },
+        ].map(s=>(
+          <div key={s.label} style={{ background:s.bg, borderRadius:12, padding:"14px 16px" }}>
+            <div style={{ fontSize:11, color:"#888", marginBottom:4 }}>{s.label}</div>
+            <div style={{ fontSize:20, fontWeight:800, color:s.color }}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {safePt.note && <div style={{ background:"#fffbe6", borderRadius:10, padding:"10px 14px", fontSize:13, color:"#856404", marginBottom:16 }}>💬 {safePt.note}</div>}
+
+      <div style={{ display:"flex", gap:0, marginBottom:20, background:"#f7f8fa", borderRadius:10, overflow:"hidden", border:"1px solid #eee" }}>
+        {[["keychains","🔑 Брелки"],["orders","📦 Замовлення"],["payments","💰 Виплати"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setTab(k)} style={{ flex:1, padding:"10px", border:"none", cursor:"pointer", fontWeight:600, fontSize:13,
+            background:tab===k?"#0f3460":"transparent", color:tab===k?"#fff":"#888" }}>{l}</button>
+        ))}
+      </div>
+
+      {/* KEYCHAINS */}
+      {tab==="keychains" && (
+        <div>
+          {/* Collapse toggle */}
+          <div onClick={()=>setKcOpen(o=>!o)} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer", background:"#f7f8fa", borderRadius:10, padding:"10px 14px", marginBottom:12, userSelect:"none" }}>
+            <span style={{ fontWeight:600, fontSize:14, color:"#0f3460" }}>🔑 Список брелків ({ptKc.length})</span>
+            <span style={{ fontSize:18, color:"#888" }}>{kcOpen ? "▲" : "▼"}</span>
+          </div>
+          {kcOpen && <>
+          {/* STOCKTAKE RESULT PREVIEW */}
+          {stocktakeResult && (
+            <div style={{ background:"#fff", borderRadius:14, padding:20, boxShadow:"0 2px 12px #0002", marginBottom:16, border:"2px solid #2ECC71" }}>
+              <div style={{ fontWeight:700, fontSize:15, color:"#0f3460", marginBottom:12 }}>📋 Результат переобліку</div>
+              {stocktakeResult.items.length === 0
+                ? <div style={{ color:"#888", marginBottom:12 }}>Нових продажів не знайдено</div>
+                : stocktakeResult.items.map(r=>(
+                  <div key={r.id} style={{ display:"flex", justifyContent:"space-between", padding:"8px 0", borderBottom:"1px solid #f0f0f0", fontSize:14 }}>
+                    <span>{r.name}</span>
+                    <span style={{ color:"#888" }}>продано ще <strong style={{color:"#e94560"}}>{r.newlySold} шт</strong></span>
+                    <span style={{ fontWeight:700, color:"#27ae60" }}>+{r.amount} грн</span>
+                  </div>
+                ))
+              }
+              <div style={{ marginTop:12, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div style={{ fontSize:16, fontWeight:800, color:"#27ae60" }}>
+                  {stocktakeResult.totalAmount > 0 ? `Додати виплату: ${stocktakeResult.totalAmount} грн` : "Виплат немає"}
+                </div>
+                <div style={{ display:"flex", gap:10 }}>
+                  <button onClick={confirmStocktake} style={btnPrimary}>✅ Підтвердити</button>
+                  <button onClick={()=>setStocktakeResult(null)} style={btnSecondary}>Змінити</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* STOCKTAKE MODE */}
+          {stocktakeMode && !stocktakeResult ? (
+            <div style={{ background:"#e8f4fd", borderRadius:14, padding:20, marginBottom:16, border:"2px solid #3498DB" }}>
+              <div style={{ fontWeight:700, fontSize:15, color:"#0f3460", marginBottom:4 }}>📦 Переоблік — введи скільки залишилось</div>
+              <div style={{ fontSize:13, color:"#555", marginBottom:16 }}>Вкажи скільки брелків фізично є в точці зараз. Програма сама порахує скільки продано і додасть виплату.</div>
+              {ptKc.map(k => {
+                const prevRemaining = k.qty - k.sold;
+                const inputVal = inventory[k.id] !== undefined ? inventory[k.id] : "";
+                const newlySold = inputVal !== "" ? prevRemaining - +inputVal : null;
+                return (
+                  <div key={k.id} style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, background:"#fff", borderRadius:10, padding:"12px 14px", flexWrap:"wrap" }}>
+                    <div style={{ flex:1, minWidth:120 }}>
+                      <div style={{ fontWeight:600 }}>{k.name}</div>
+                      <div style={{ fontSize:12, color:"#888" }}>Було: {prevRemaining} шт · {k.price} грн/шт</div>
+                    </div>
+                    <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                      <label style={{ fontSize:13, color:"#555" }}>Залишилось:</label>
+                      <input type="number" min="0" max={prevRemaining} value={inputVal}
+                        onChange={e=>setInventory(v=>({...v,[k.id]:e.target.value}))}
+                        style={{ ...inputStyle, width:70, padding:"6px 10px", fontWeight:700, fontSize:16, textAlign:"center" }}/>
+                      <span style={{ fontSize:13, color:"#888" }}>шт</span>
+                    </div>
+                    {newlySold !== null && newlySold > 0 && (
+                      <div style={{ fontSize:13, fontWeight:700, color:"#e94560" }}>продано {newlySold} шт → +{newlySold*k.price} грн</div>
+                    )}
+                    {newlySold !== null && newlySold === 0 && (
+                      <div style={{ fontSize:13, color:"#aaa" }}>нових продажів немає</div>
+                    )}
+                    {newlySold !== null && newlySold < 0 && (
+                      <div style={{ fontSize:13, color:"#e74c3c" }}>⚠️ Більше ніж було!</div>
+                    )}
+                  </div>
+                );
+              })}
+              <div style={{ display:"flex", gap:10, marginTop:8 }}>
+                <button onClick={calcStocktake} style={btnPrimary}>Порахувати →</button>
+                <button onClick={()=>{setStocktakeMode(false);setInventory({});}} style={btnSecondary}>Скасувати</button>
+              </div>
+            </div>
+          ) : !stocktakeResult && (
+            <button onClick={()=>setStocktakeMode(true)} style={{ ...btnPrimary, background:"#3498DB", marginBottom:16, width:"100%" }}>
+              📦 Переоблік — прийшов в кофейню
+            </button>
+          )}
+
+          {ptKc.length===0
+            ? <div style={{ textAlign:"center", color:"#bbb", padding:"20px 0" }}>Брелків ще немає — додай нижче</div>
+            : ptKc.map(k=>(
+              <div key={k.id} style={{ background:"#fff", borderRadius:12, padding:"14px 16px", marginBottom:10, boxShadow:"0 1px 6px #0001", display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
+                <div style={{ flex:1, minWidth:120 }}>
+                  <div style={{ fontWeight:600, fontSize:14 }}>{k.name}</div>
+                  <div style={{ fontSize:12, color:"#888", marginTop:2 }}>{k.price} грн/шт · здано {k.qty} шт</div>
+                </div>
+                <div style={{ fontSize:13, color:"#555" }}>
+                  Продано: <strong style={{color:"#e94560"}}>{k.sold}</strong> · Залишок: <strong style={{color:"#0f3460"}}>{k.qty-k.sold}</strong>
+                </div>
+                <div style={{ fontSize:13, fontWeight:700, color:"#27ae60" }}>{k.sold*k.price} грн</div>
+                <button onClick={()=>delKeychain(k.id)} style={btnIcon}>🗑</button>
+              </div>
+            ))
+          }
+          {/* DELIVERY FORM - multiple items */}
+          <div style={{ background:"#f0f7ff", borderRadius:12, padding:16, marginTop:12, border:"2px solid #3498DB" }}>
+            <div style={{ fontWeight:700, fontSize:14, color:"#0f3460", marginBottom:12 }}>📦 Нова поставка</div>
+
+            {kcForm.items.map((item, idx) => (
+              <div key={idx} style={{ display:"flex", gap:8, marginBottom:8, alignItems:"flex-end", flexWrap:"wrap" }}>
+                <div style={{ flex:2, minWidth:120 }}>
+                  {idx===0 && <label style={labelStyle}>Назва брелка</label>}
+                  <input value={item.name} onChange={e=>setKcForm(f=>({...f,items:f.items.map((x,i)=>i===idx?{...x,name:e.target.value}:x)}))}
+                    placeholder="Брелок-кіт" style={{...inputStyle,width:"100%"}}/>
+                </div>
+                <div style={{ flex:1, minWidth:60 }}>
+                  {idx===0 && <label style={labelStyle}>Кількість</label>}
+                  <input type="number" value={item.qty} onChange={e=>setKcForm(f=>({...f,items:f.items.map((x,i)=>i===idx?{...x,qty:e.target.value}:x)}))}
+                    placeholder="10" style={{...inputStyle,width:"100%"}}/>
+                </div>
+                <div style={{ flex:1, minWidth:60 }}>
+                  {idx===0 && <label style={labelStyle}>Ціна, грн</label>}
+                  <input type="number" value={item.price} onChange={e=>setKcForm(f=>({...f,items:f.items.map((x,i)=>i===idx?{...x,price:e.target.value}:x)}))}
+                    placeholder="120" style={{...inputStyle,width:"100%"}}/>
+                </div>
+                {idx===0 && item.qty && item.price && (
+                  <div style={{ fontSize:12, color:"#0f3460", fontWeight:600, whiteSpace:"nowrap" }}>{+item.qty * +item.price} грн</div>
+                )}
+                {kcForm.items.length > 1 && (
+                  <button onClick={()=>setKcForm(f=>({...f,items:f.items.filter((_,i)=>i!==idx)}))} style={{...btnIcon, color:"#e74c3c"}}>✕</button>
+                )}
+              </div>
+            ))}
+
+            <div style={{ display:"flex", gap:8, marginTop:8, flexWrap:"wrap" }}>
+              <button onClick={()=>setKcForm(f=>({...f,items:[...f.items,{name:"",qty:"",price:""}]}))}
+                style={{...btnSecondary, fontSize:13, padding:"6px 12px"}}>+ Ще позиція</button>
+              <button onClick={addKeychain}
+                style={{...btnPrimary, background:safePt.type==="buyout"?"#27ae60":"#e94560", fontSize:13}}>
+                ✅ {safePt.type==="buyout"?"Викуп":"Здати"} і роздрукувати накладну
+              </button>
+            </div>
+          </div>
+
+          {/* INVOICE MODAL */}
+          {invoice && (
+            <div style={modalOverlay}>
+              <div style={{ background:"#fff", borderRadius:16, padding:24, width:"95%", maxWidth:560, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 8px 40px #0004" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+                  <h3 style={{ margin:0, color:"#0f3460" }}>📄 Накладна на поставку</h3>
+                  <button onClick={()=>setInvoice(null)} style={btnIcon}>✕</button>
+                </div>
+
+                <div id="invoice-print" style={{ border:"1px solid #e0e0e0", borderRadius:10, padding:20 }}>
+                  <div style={{ textAlign:"center", marginBottom:14, borderBottom:"2px solid #0f3460", paddingBottom:10 }}>
+                    <div style={{ fontWeight:800, fontSize:17, color:"#0f3460" }}>НАКЛАДНА НА ПОСТАЧАННЯ</div>
+                    <div style={{ fontSize:12, color:"#888", marginTop:3 }}>Дата: {invoice.date}</div>
+                  </div>
+
+                  <div style={{ marginBottom:12 }}>
+                    <span style={{ fontSize:12, color:"#888" }}>Заклад: </span>
+                    <strong>{safePt.name}</strong>
+                    {safePt.address && <span style={{ fontSize:12, color:"#555" }}> · {safePt.address}</span>}
+                    <span style={{ fontSize:12, color:"#888", marginLeft:8 }}>{invoice.isBuyout?"💰 Викуп":"🔄 Реалізація"}</span>
+                  </div>
+
+                  <div style={{ marginBottom:12 }}>
+                    <div style={{ fontSize:11, fontWeight:700, color:"#888", textTransform:"uppercase", marginBottom:6 }}>Нова поставка:</div>
+                    <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                      <thead>
+                        <tr style={{ background:"#e8f4fd" }}>
+                          <th style={{ padding:"6px 10px", textAlign:"left" }}>Назва</th>
+                          <th style={{ padding:"6px 10px", textAlign:"center" }}>Кількість</th>
+                          <th style={{ padding:"6px 10px", textAlign:"center" }}>Ціна</th>
+                          <th style={{ padding:"6px 10px", textAlign:"right" }}>Сума</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {invoice.newItems.map((item,i)=>(
+                          <tr key={i} style={{ borderTop:"1px solid #f0f0f0" }}>
+                            <td style={{ padding:"6px 10px" }}>{item.name}</td>
+                            <td style={{ padding:"6px 10px", textAlign:"center" }}>{item.qty} шт</td>
+                            <td style={{ padding:"6px 10px", textAlign:"center" }}>{item.price} грн</td>
+                            <td style={{ padding:"6px 10px", textAlign:"right", fontWeight:700 }}>{item.qty*item.price} грн</td>
+                          </tr>
+                        ))}
+                        <tr style={{ borderTop:"2px solid #3498DB", fontWeight:700, background:"#e8f4fd" }}>
+                          <td style={{ padding:"7px 10px" }}>РАЗОМ (нова поставка)</td>
+                          <td style={{ padding:"7px 10px", textAlign:"center" }}>{invoice.newItems.reduce((s,i)=>s+i.qty,0)} шт</td>
+                          <td></td>
+                          <td style={{ padding:"7px 10px", textAlign:"right", color:"#0f3460" }}>{invoice.newItems.reduce((s,i)=>s+i.qty*i.price,0)} грн</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div style={{ display:"flex", justifyContent:"space-between", marginTop:16, paddingTop:12, borderTop:"1px dashed #ccc", fontSize:12, color:"#555" }}>
+                    <div>Здав: _______________</div>
+                    <div>Прийняв: _______________</div>
+                  </div>
+                </div>
+
+                <div style={{ display:"flex", gap:10, marginTop:14 }}>
+                  <button onClick={()=>{
+                    const el = document.getElementById("invoice-print");
+                    const w = window.open("","_blank");
+                    w.document.write(`<!DOCTYPE html><html><head><title>Накладна - ${safePt.name}</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#111}table{width:100%;border-collapse:collapse;margin-bottom:12px}th,td{padding:7px 10px;border:1px solid #ddd;font-size:13px}th{background:#f0f0f0;font-weight:600}tr:nth-child(even){background:#fafafa}.total{font-weight:700;background:#e8f8f0!important}</style></head><body>${el.innerHTML}</body></html>`);
+                    w.document.close(); w.print();
+                  }} style={btnPrimary}>🖨 Роздрукувати</button>
+                  <button onClick={()=>setInvoice(null)} style={btnSecondary}>Закрити</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          </>}
+        </div>
+      )}
+
+      {/* POINT ORDERS */}
+      {tab==="orders" && (
+        <div>
+          {ptOrders.length===0
+            ? <div style={{ textAlign:"center", color:"#bbb", padding:"30px 0" }}>Замовлень ще немає — додай нижче</div>
+            : [...ptOrders].reverse().map(o=>{
+              const profit = (o.price||0) - (o.cost||0);
+              return (
+                <div key={o.id} style={{ background:"#fff", borderRadius:12, padding:"14px 16px", marginBottom:10, boxShadow:"0 1px 6px #0001" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", flexWrap:"wrap", gap:8 }}>
+                    <div>
+                      <div style={{ fontWeight:600, fontSize:14 }}>{o.name}</div>
+                      <div style={{ fontSize:12, color:"#888", marginTop:2 }}>{o.date}</div>
+                    </div>
+                    <button onClick={()=>update(p=>({...p, pointOrders:(p.pointOrders||[]).filter(x=>x.id!==o.id)}))} style={btnIcon}>🗑</button>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginTop:10 }}>
+                    <div style={{ background:"#fdecea", borderRadius:8, padding:"8px 10px" }}>
+                      <div style={{ fontSize:10, color:"#888" }}>Собівартість</div>
+                      <div style={{ fontWeight:700, color:"#e74c3c" }}>{o.cost} грн</div>
+                    </div>
+                    <div style={{ background:"#e8f4fd", borderRadius:8, padding:"8px 10px" }}>
+                      <div style={{ fontSize:10, color:"#888" }}>Ціна</div>
+                      <div style={{ fontWeight:700, color:"#0f3460" }}>{o.price} грн</div>
+                    </div>
+                    <div style={{ background: profit>=0?"#f0fff4":"#fdecea", borderRadius:8, padding:"8px 10px" }}>
+                      <div style={{ fontSize:10, color:"#888" }}>Прибуток</div>
+                      <div style={{ fontWeight:700, color: profit>=0?"#27ae60":"#e74c3c" }}>{profit} грн</div>
+                    </div>
+                  </div>
+                  {o.note && <div style={{ fontSize:12, color:"#888", marginTop:8 }}>💬 {o.note}</div>}
+                </div>
+              );
+            })
+          }
+
+          {/* Totals */}
+          {ptOrders.length > 0 && (
+            <div style={{ background:"linear-gradient(135deg,#0f3460,#16213e)", borderRadius:12, padding:"14px 18px", marginBottom:16, display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, color:"#fff" }}>
+              {[
+                ["Загальна виручка", ptOrders.reduce((s,o)=>s+(o.price||0),0)+" грн", "#3498DB"],
+                ["Собівартість",     ptOrders.reduce((s,o)=>s+(o.cost||0),0)+" грн",  "#E74C3C"],
+                ["Прибуток",         ptOrders.reduce((s,o)=>s+(o.price||0)-(o.cost||0),0)+" грн", "#2ECC71"],
+              ].map(([l,v,c])=>(
+                <div key={l}>
+                  <div style={{ fontSize:10, color:"#a0aec0" }}>{l}</div>
+                  <div style={{ fontSize:16, fontWeight:800, color:c }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add order form */}
+          <div style={{ background:"#f7f8fa", borderRadius:12, padding:16, marginTop:8 }}>
+            <div style={{ fontWeight:600, fontSize:13, color:"#0f3460", marginBottom:10 }}>+ Нове замовлення</div>
+            <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr", gap:10, marginBottom:10 }}>
+              <div>
+                <label style={labelStyle}>Назва</label>
+                <input value={poForm.name} onChange={e=>setPoForm(f=>({...f,name:e.target.value}))} placeholder="Підставка під телефон"
+                  style={{...inputStyle,width:"100%"}}/>
+              </div>
+              <div>
+                <label style={labelStyle}>Собівартість</label>
+                <input type="number" value={poForm.cost} onChange={e=>setPoForm(f=>({...f,cost:e.target.value}))} placeholder="80"
+                  style={{...inputStyle,width:"100%"}}/>
+              </div>
+              <div>
+                <label style={labelStyle}>Ціна</label>
+                <input type="number" value={poForm.price} onChange={e=>setPoForm(f=>({...f,price:e.target.value}))} placeholder="200"
+                  style={{...inputStyle,width:"100%"}}/>
+              </div>
+            </div>
+            {poForm.cost && poForm.price && (
+              <div style={{ fontSize:13, color:"#27ae60", fontWeight:600, marginBottom:8 }}>
+                Прибуток: {+poForm.price - +poForm.cost} грн
+              </div>
+            )}
+            <button onClick={()=>{
+              if(!poForm.name||!poForm.price) return;
+              update(p=>({...p, pointOrders:[...(p.pointOrders||[]), {id:uid(), name:poForm.name, cost:+poForm.cost||0, price:+poForm.price, date:today(), note:""}]}));
+              setPoForm({name:"",cost:"",price:""});
+            }} style={btnPrimary}>Додати замовлення</button>
+          </div>
+        </div>
+      )}
+
+      {/* PAYMENTS */}
+      {tab==="payments" && (
+        <div>
+          {unpaid > 0 && (
+            <div style={{ background:"#fff8e6", borderRadius:12, padding:"14px 18px", marginBottom:16, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <div>
+                <div style={{ fontSize:13, color:"#856404" }}>Очікується виплата</div>
+                <div style={{ fontSize:22, fontWeight:800, color:"#e67e22" }}>{unpaid} грн</div>
+              </div>
+              <button onClick={()=>{ setPayForm({amount:unpaid,note:""}); setPayModal(true); }} style={btnPrimary}>
+                ✅ Позначити виплату
+              </button>
+            </div>
+          )}
+
+          {payModal && (
+            <div style={modalOverlay}>
+              <div style={modalBox}>
+                <h3 style={{ margin:"0 0 16px", color:"#0f3460" }}>💰 Нова виплата</h3>
+                <Field label="Сума (грн)" type="number" value={payForm.amount} onChange={v=>setPayForm(f=>({...f,amount:v}))}/>
+                <Field label="Нотатка"   value={payForm.note}   onChange={v=>setPayForm(f=>({...f,note:v}))} placeholder="напр. готівка"/>
+                <div style={{ display:"flex", gap:10, marginTop:14 }}>
+                  <button onClick={addPayment} style={btnPrimary}>Зберегти</button>
+                  <button onClick={()=>setPayModal(false)} style={btnSecondary}>Скасувати</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {ptPays.length===0
+            ? <div style={{ textAlign:"center", color:"#bbb", padding:"30px 0" }}>Виплат ще не було</div>
+            : [...ptPays].reverse().map(pay=>(
+              <div key={pay.id} style={{ background:"#fff", borderRadius:12, padding:"12px 16px", marginBottom:8, boxShadow:"0 1px 6px #0001", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <div>
+                  <div style={{ fontWeight:700, color:"#27ae60", fontSize:16 }}>+{pay.amount} грн</div>
+                  <div style={{ fontSize:12, color:"#888" }}>{pay.date}{pay.note ? ` · ${pay.note}` : ""}</div>
+                </div>
+                <button onClick={()=>delPayment(pay.id)} style={btnIcon}>🗑</button>
+              </div>
+            ))
+          }
+          <div style={{ marginTop:12 }}>
+            <button onClick={()=>{ setPayForm({amount:"",note:""}); setPayModal(true); }} style={btnSecondary}>+ Додати виплату вручну</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SHARED ─────────────────────────────────────────────────────────────────────
+function StatusBadge({ s }) {
+  const c = STATUS_COLORS[s]||{};
+  return <span style={{ background:c.bg, color:c.text, borderRadius:20, padding:"2px 10px", fontSize:12, fontWeight:600 }}>{s}</span>;
+}
+function Card({ title, children }) {
+  return (
+    <div style={{ background:"#fff", borderRadius:12, padding:20, boxShadow:"0 2px 8px #0001", marginBottom:0 }}>
+      <h3 style={{ margin:"0 0 14px", fontSize:15, color:"#0f3460" }}>{title}</h3>
+      {children}
+    </div>
+  );
+}
+function Field({ label, value, onChange, type="text", placeholder="", step }) {
+  return (
+    <div style={{ marginBottom:10 }}>
+      <label style={labelStyle}>{label}</label>
+      <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} step={step}
+        style={{...inputStyle,width:"100%"}}/>
+    </div>
+  );
+}
+function Slider({ label, value, min, max, step=1, onChange, unit }) {
+  return (
+    <div style={{ marginBottom:14 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+        <label style={labelStyle}>{label}</label>
+        <strong style={{ color:"#0f3460", fontSize:14 }}>{value} {unit}</strong>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={e=>onChange(+e.target.value)}
+        style={{ width:"100%", accentColor:"#e94560" }}/>
+    </div>
+  );
+}
+
+const h2           = { margin:"0 0 12px", fontSize:22, color:"#0f3460" };
+const td           = { padding:"9px 12px", verticalAlign:"top" };
+const labelStyle   = { display:"block", fontSize:12, fontWeight:600, color:"#666", marginBottom:4 };
+const inputStyle   = { border:"1px solid #e0e0e0", borderRadius:8, padding:"8px 10px", fontSize:14, outline:"none", background:"#fafafa", boxSizing:"border-box" };
+const btnPrimary   = { background:"#e94560", color:"#fff", border:"none", borderRadius:8, padding:"9px 18px", cursor:"pointer", fontWeight:600, fontSize:14 };
+const btnSecondary = { background:"#f0f0f0", color:"#333", border:"none", borderRadius:8, padding:"9px 18px", cursor:"pointer", fontWeight:600, fontSize:14 };
+const btnIcon      = { background:"transparent", border:"none", cursor:"pointer", fontSize:16, padding:"2px 6px", borderRadius:6 };
+const qtyBtn       = { background:"#f0f0f0", border:"none", borderRadius:6, width:24, height:24, cursor:"pointer", fontWeight:700, fontSize:14 };
+const modalOverlay = { position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000 };
+const modalBox     = { background:"#fff", borderRadius:16, padding:28, width:"90%", maxWidth:560, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 8px 40px #0004" };
+
+// ── AI ORDER ───────────────────────────────────────────────────────────────────
+function AIOrder({ orders, setOrders, filaments, calcOrder, setTab, setPrefill }) {
+  const DEFAULT_TEMPLATE = `Привіт! 🖨
+
+Щоб порахувати вартість і строки, напиши:
+
+1️⃣ Як тебе звати?
+2️⃣ Номер телефону (для зв'язку):
+3️⃣ Що треба надрукувати? Опиши своїми словами:
+4️⃣ Потрібна розробка моделі чи є готовий файл? (є файл / треба зробити з нуля):
+5️⃣ Колір пластику (або без різниці):
+6️⃣ Скільки штук:
+7️⃣ Коли потрібно:
+8️⃣ Щось ще важливе — пиши тут:
+
+Відповім швидко 🔥`;
+
+  const [step, setStep]             = useState("template");
+  const [clientText, setClientText] = useState("");
+  const [loading, setLoading]       = useState(false);
+  const [parsed, setParsed]         = useState(null);
+  const [error, setError]           = useState("");
+  const [copied, setCopied]         = useState(false);
+  const [editing, setEditing]       = useState(false);
+  const [template, setTemplate]     = useState(DEFAULT_TEMPLATE);
+
+  const copyTemplate = () => {
+    navigator.clipboard.writeText(template).then(() => { setCopied(true); setTimeout(()=>setCopied(false), 2000); });
+  };
+
+  const parseWithAI = async () => {
+    if (!clientText.trim()) return setError("Вставте відповідь клієнта");
+    setError(""); setLoading(true);
+
+    const filamentNames = filaments.map(f => f.name).join(", ");
+
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1000,
+          messages: [{
+            role: "user",
+            content: `Ти — помічник для 3D-бізнесу. Проаналізуй відповідь клієнта і витягни дані для заказу.
+
+Доступні філаменти: ${filamentNames}
+
+Відповідь клієнта:
+${clientText}
+
+Поверни ТІЛЬКИ JSON без пояснень та без markdown:
+{
+  "client": "Ім'я Прізвище",
+  "phone": "номер або порожньо",
+  "item": "опис виробу (включи кількість якщо вказана)",
+  "filament": "назва філаменту з доступних або перший за замовчуванням",
+  "hasModel": true або false,
+  "deadline": "термін або порожньо",
+  "note": "додаткові побажання або порожньо",
+  "confidence": "high/medium/low"
+}`
+          }]
+        })
+      });
+      const data = await res.json();
+      const text = data.content.map(c => c.text || "").join("");
+      const clean = text.replace(/```json|```/g, "").trim();
+      const obj = JSON.parse(clean);
+      setParsed(obj);
+      setStep("preview");
+    } catch(e) {
+      setError("Помилка аналізу. Спробуй ще раз або введи дані вручну.");
+    }
+    setLoading(false);
+  };
+
+  const goToCalc = () => {
+    setPrefill({
+      client:     parsed.client || "",
+      phone:      parsed.phone  || "",
+      item:       parsed.item   || "",
+      hasModel:   parsed.hasModel || false,
+      filament:   parsed.filament || filaments[0]?.name || "",
+      deadline:   parsed.deadline || "",
+      note:       parsed.note || "",
+    });
+    setTab("calc");
+    reset();
+  };
+
+  const reset = () => { setStep("template"); setClientText(""); setParsed(null); setError(""); };
+
+  return (
+    <div>
+      <h2 style={h2}>🤖 Новий заказ через ШІ</h2>
+
+      {/* Steps indicator */}
+      <div style={{ display:"flex", gap:0, marginBottom:28, background:"#fff", borderRadius:12, overflow:"hidden", boxShadow:"0 2px 8px #0001" }}>
+        {[
+          { key:"template", label:"1. Шаблон",       icon:"📋" },
+          { key:"paste",    label:"2. Відповідь",    icon:"📩" },
+          { key:"preview",  label:"3. Перевірка",    icon:"✅" },
+        ].map((s, i) => {
+          const active  = step === s.key || (step==="done" && s.key==="preview");
+          const done    = (i===0 && ["paste","preview","done"].includes(step))
+                       || (i===1 && ["preview","done"].includes(step));
+          return (
+            <div key={s.key} style={{ flex:1, padding:"14px 10px", textAlign:"center", background: done?"#e8f8f0": active?"#0f3460":"#fff", borderRight:"1px solid #f0f0f0" }}>
+              <div style={{ fontSize:20 }}>{done ? "✅" : s.icon}</div>
+              <div style={{ fontSize:12, fontWeight:600, color: done?"#27ae60": active?"#fff":"#888", marginTop:4 }}>{s.label}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* STEP 1: Template */}
+      {step === "template" && (
+        <div>
+          <div style={{ background:"#fff", borderRadius:14, padding:24, boxShadow:"0 2px 8px #0001", marginBottom:16 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+              <div style={{ fontSize:14, fontWeight:600, color:"#0f3460" }}>📋 Шаблон для клієнта</div>
+              <button onClick={()=>setEditing(e=>!e)} style={{ background:"none", border:"1px solid #e0e0e0", borderRadius:8, padding:"4px 12px", cursor:"pointer", fontSize:12, color:"#555" }}>
+                {editing ? "👁 Переглянути" : "✏️ Редагувати"}
+              </button>
+            </div>
+            {editing ? (
+              <textarea
+                value={template}
+                onChange={e=>setTemplate(e.target.value)}
+                style={{ width:"100%", minHeight:260, border:"1px solid #9B59B6", borderRadius:10, padding:"12px 14px", fontSize:13, fontFamily:"monospace", lineHeight:1.7, resize:"vertical", outline:"none", background:"#faf5ff", boxSizing:"border-box" }}
+              />
+            ) : (
+              <div style={{ background:"#f7f8fa", borderRadius:10, padding:16, fontFamily:"monospace", fontSize:13, lineHeight:1.7, whiteSpace:"pre-wrap", color:"#333", border:"1px solid #e8e8e8" }}>
+                {template}
+              </div>
+            )}
+            {editing && (
+              <button onClick={()=>setTemplate(DEFAULT_TEMPLATE)} style={{ background:"none", border:"none", color:"#aaa", fontSize:12, cursor:"pointer", marginTop:6, padding:0 }}>
+                ↺ Скинути до стандартного
+              </button>
+            )}
+            <div style={{ display:"flex", gap:10, marginTop:16 }}>
+              <button onClick={copyTemplate} style={{ ...btnPrimary, background: copied ? "#27ae60" : "#e94560" }}>
+                {copied ? "✅ Скопійовано!" : "📋 Копіювати шаблон"}
+              </button>
+              <button onClick={() => setStep("paste")} style={btnSecondary}>Далі →</button>
+            </div>
+          </div>
+          <div style={{ background:"#e8f4fd", borderRadius:10, padding:14, fontSize:13, color:"#1a6fa8" }}>
+            💡 Скопіюй шаблон і відправ клієнту в Instagram або Telegram. Коли він відповість — повернись сюди і натисни <strong>Далі</strong>.
+          </div>
+        </div>
+      )}
+
+      {/* STEP 2: Paste client reply */}
+      {step === "paste" && (
+        <div>
+          <div style={{ background:"#fff", borderRadius:14, padding:24, boxShadow:"0 2px 8px #0001" }}>
+            <div style={{ fontSize:14, fontWeight:600, color:"#0f3460", marginBottom:12 }}>📩 Вставте відповідь клієнта</div>
+            <div style={{ fontSize:13, color:"#888", marginBottom:12 }}>
+              Скопіюй повідомлення клієнта з Instagram або Telegram і встав сюди — ШІ сам розбере всі дані.
+            </div>
+            <textarea
+              value={clientText}
+              onChange={e => setClientText(e.target.value)}
+              placeholder={"Наприклад:\n1️⃣ Марина Коваль\n2️⃣ +380671234567\n3️⃣ Підставка під телефон з логотипом компанії\n4️⃣ Так, потрібна розробка моделі\n5️⃣ Чорний\n6️⃣ 2 штуки\n7️⃣ Через тиждень\n8️⃣ Лого надішлю окремо"}
+              style={{ width:"100%", minHeight:220, border:"1px solid #e0e0e0", borderRadius:10, padding:"12px 14px", fontSize:14, fontFamily:"inherit", resize:"vertical", outline:"none", background:"#fafafa", boxSizing:"border-box", lineHeight:1.6 }}
+            />
+            {error && <div style={{ color:"#e74c3c", fontSize:13, marginTop:8 }}>⚠️ {error}</div>}
+            <div style={{ display:"flex", gap:10, marginTop:16 }}>
+              <button onClick={parseWithAI} disabled={loading} style={{ ...btnPrimary, opacity: loading ? 0.7 : 1, minWidth:180 }}>
+                {loading ? "⏳ Аналізую..." : "🤖 Створити заказ"}
+              </button>
+              <button onClick={() => setStep("template")} style={btnSecondary}>← Назад</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 3: Preview parsed order */}
+      {step === "preview" && parsed && (
+        <div>
+          <div style={{ background:"#fff", borderRadius:14, padding:24, boxShadow:"0 2px 8px #0001", marginBottom:16 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+              <div style={{ fontSize:14, fontWeight:600, color:"#0f3460" }}>✅ ШІ розпізнав заказ</div>
+              <span style={{ background: parsed.confidence==="high"?"#d1f2eb": parsed.confidence==="medium"?"#fff3cd":"#fdecea",
+                color: parsed.confidence==="high"?"#0e6655": parsed.confidence==="medium"?"#856404":"#c0392b",
+                borderRadius:20, padding:"3px 12px", fontSize:12, fontWeight:600 }}>
+                {parsed.confidence==="high"?"✅ Впевнений": parsed.confidence==="medium"?"⚠️ Перевір дані":"❓ Уточни дані"}
+              </span>
+            </div>
+
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+              {[
+                ["👤 Клієнт",    parsed.client   || "—"],
+                ["📞 Телефон",   parsed.phone    || "—"],
+                ["📦 Виріб",     parsed.item     || "—"],
+                ["🎞 Філамент",  parsed.filament || "—"],
+                ["📐 Модель",    parsed.hasModel ? "✅ Так" : "❌ Ні"],
+                ["📅 Термін",    parsed.deadline || "Не вказано"],
+                ["💬 Нотатка",   parsed.note     || "—"],
+              ].map(([l,v]) => (
+                <div key={l} style={{ background:"#f7f8fa", borderRadius:10, padding:"10px 14px" }}>
+                  <div style={{ fontSize:11, color:"#888", marginBottom:3 }}>{l}</div>
+                  <div style={{ fontSize:14, fontWeight:600, color:"#1a1a2e" }}>{v}</div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background:"#fff8e6", borderRadius:10, padding:"10px 14px", fontSize:13, color:"#856404", marginBottom:16 }}>
+              ⚠️ Граммы, години друку та ціна будуть порожніми — заповни їх після аналізу моделі.
+            </div>
+
+            <div style={{ display:"flex", gap:10 }}>
+              <button onClick={goToCalc} style={btnPrimary}>🧮 Далі → Калькулятор</button>
+              <button onClick={() => setStep("paste")} style={btnSecondary}>← Редагувати</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DONE */}
+      {step === "done" && (
+        <div style={{ textAlign:"center", padding:"40px 20px", background:"#fff", borderRadius:14, boxShadow:"0 2px 8px #0001" }}>
+          <div style={{ fontSize:56, marginBottom:16 }}>🎉</div>
+          <div style={{ fontSize:20, fontWeight:700, color:"#0f3460", marginBottom:8 }}>Заказ створено!</div>
+          <div style={{ color:"#888", marginBottom:24 }}>Перейди в 📦 Заказы, знайди новий заказ і заповни граммы, години та ціну.</div>
+          <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
+            <button onClick={reset} style={btnPrimary}>🤖 Новий заказ</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+  </script>
+</body>
+</html>
