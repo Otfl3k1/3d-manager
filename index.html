@@ -130,7 +130,9 @@ function App() {
   const totalCost    = doneOrders.reduce((s,o) => s + calcOrder(o,filaments).cost, 0);
   const pointOrdersRevenue = points.reduce((s,p) => s + (p.pointOrders||[]).reduce((a,o) => a + (o.price||0), 0), 0);
   const pointOrdersCost    = points.reduce((s,p) => s + (p.pointOrders||[]).reduce((a,o) => a + (o.cost||0), 0), 0);
-  const netProfit    = (totalRevenue - totalCost) + (pointOrdersRevenue - pointOrdersCost);
+  // Payments from all points (buyout payments + consignment payments)
+  const pointPayments      = points.reduce((s,p) => s + (p.payments||[]).reduce((a,pay) => a + (pay.amount||0), 0), 0);
+  const netProfit    = (totalRevenue - totalCost) + (pointOrdersRevenue - pointOrdersCost) + pointPayments;
   const activeOrders = orders.filter(o => ["Новый","В работе"].includes(o.status)).length;
   const lowFilament  = filaments.filter(f => f.stock < 200).length;
   const totalItems   = points.reduce((s,p) => s + (p.keychains||[]).reduce((a,k) => a + Math.max(0,(k.qty||0)-(k.sold||0)), 0), 0);
@@ -163,7 +165,7 @@ function App() {
         </div>
       </div>
       <div style={{ padding:"24px 20px", maxWidth:1100, margin:"0 auto" }}>
-        {tab==="dashboard" && <Dashboard orders={orders} filaments={filaments} points={points} totalRevenue={totalRevenue} totalCost={totalCost} netProfit={netProfit} pointOrdersRevenue={pointOrdersRevenue} pointOrdersCost={pointOrdersCost} activeOrders={activeOrders} lowFilament={lowFilament} totalItems={totalItems} calcOrder={calcOrder}/>}
+        {tab==="dashboard" && <Dashboard orders={orders} filaments={filaments} points={points} totalRevenue={totalRevenue} totalCost={totalCost} netProfit={netProfit} pointOrdersRevenue={pointOrdersRevenue} pointOrdersCost={pointOrdersCost} pointPayments={pointPayments} activeOrders={activeOrders} lowFilament={lowFilament} totalItems={totalItems} calcOrder={calcOrder}/>}
         {tab==="ai"        && <AIOrder orders={orders} setOrders={setOrders} filaments={filaments} calcOrder={calcOrder} setTab={setTab} setPrefill={setPrefill}/>}
         {tab==="orders"    && <Orders    orders={orders} setOrders={setOrders} filaments={filaments} calcOrder={calcOrder}/>}
         {tab==="calc"      && <Calculator filaments={filaments} prefill={prefill} setPrefill={setPrefill} setOrders={setOrders}/>}
@@ -283,7 +285,7 @@ function showInvoiceOverlay(type, ptKc, invoice, pt) {
 }
 
 // ── DASHBOARD ──────────────────────────────────────────────────────────────────
-function Dashboard({ orders, filaments, points, totalRevenue, totalCost, netProfit, pointOrdersRevenue, pointOrdersCost, activeOrders, lowFilament, totalItems, calcOrder }) {
+function Dashboard({ orders, filaments, points, totalRevenue, totalCost, netProfit, pointOrdersRevenue, pointOrdersCost, pointPayments, activeOrders, lowFilament, totalItems, calcOrder }) {
   const [period, setPeriod] = useState("month"); // week | month | year | all
   const byStatus  = Object.keys(STATUS_COLORS).map(s => ({ s, n: orders.filter(o=>o.status===s).length }));
   const recent    = [...orders].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
@@ -301,9 +303,10 @@ function Dashboard({ orders, filaments, points, totalRevenue, totalCost, netProf
   const periodOrders = orders.filter(o => o.status==="Выдан" && o.date >= periodStart);
   const periodRev    = periodOrders.reduce((s,o) => s + calcOrder(o,filaments).revenue, 0);
   const periodCost   = periodOrders.reduce((s,o) => s + calcOrder(o,filaments).cost, 0);
-  const periodPtRev  = points.reduce((s,p) => s + (p.pointOrders||[]).filter(o=>o.date>=periodStart).reduce((a,o)=>a+(o.price||0),0), 0);
-  const periodPtCost = points.reduce((s,p) => s + (p.pointOrders||[]).filter(o=>o.date>=periodStart).reduce((a,o)=>a+(o.cost||0),0), 0);
-  const periodProfit = (periodRev - periodCost) + (periodPtRev - periodPtCost);
+  const periodPtRev      = points.reduce((s,p) => s + (p.pointOrders||[]).filter(o=>o.date>=periodStart).reduce((a,o)=>a+(o.price||0),0), 0);
+  const periodPtCost     = points.reduce((s,p) => s + (p.pointOrders||[]).filter(o=>o.date>=periodStart).reduce((a,o)=>a+(o.cost||0),0), 0);
+  const periodPtPayments = points.reduce((s,p) => s + (p.payments||[]).filter(pay=>pay.date>=periodStart).reduce((a,pay)=>a+(pay.amount||0),0), 0);
+  const periodProfit = (periodRev - periodCost) + (periodPtRev - periodPtCost) + periodPtPayments;
 
   // ── Chart: last 6 months revenue ──
   const months = Array.from({length:6}, (_,i) => {
@@ -345,7 +348,7 @@ function Dashboard({ orders, filaments, points, totalRevenue, totalCost, netProf
       {/* Period stats */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:20 }}>
         {[
-          { label:"Виручка", value:`${fmt(periodRev+periodPtRev)} грн`, color:"#3498DB", bg:"#e8f4fd" },
+          { label:"Виручка", value:`${fmt(periodRev+periodPtRev+periodPtPayments)} грн`, color:"#3498DB", bg:"#e8f4fd" },
           { label:"Витрати", value:`${fmt(periodCost+periodPtCost)} грн`, color:"#E74C3C", bg:"#fdecea" },
           { label:"Прибуток", value:`${fmt(periodProfit)} грн`, color: periodProfit>=0?"#27ae60":"#e74c3c", bg: periodProfit>=0?"#f0fff4":"#fdecea" },
           { label:"Заказів", value:periodOrders.length, color:"#9B59B6", bg:"#f5f0ff" },
@@ -408,7 +411,7 @@ function Dashboard({ orders, filaments, points, totalRevenue, totalCost, netProf
         <div style={{ fontSize:12, color:"#a0aec0", marginBottom:12, fontWeight:600, letterSpacing:1, textTransform:"uppercase" }}>Всього за весь час</div>
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:12 }}>
           {[
-            { label:"Виручка",       value:`${fmt(totalRevenue+pointOrdersRevenue)} грн`, color:"#3498DB" },
+            { label:"Виручка",       value:`${fmt(totalRevenue+pointOrdersRevenue+pointPayments)} грн`, color:"#3498DB" },
             { label:"Витрати",       value:`${fmt(totalCost+pointOrdersCost)} грн`,        color:"#E74C3C" },
             { label:"Чистий прибуток",value:`${fmt(netProfit)} грн`,                       color:"#2ECC71" },
             { label:"Заказів виконано",value:orders.filter(o=>o.status==="Выдан").length,  color:"#9B59B6" },
