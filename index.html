@@ -12,8 +12,6 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: "Segoe UI", system-ui, sans-serif; background: #F7F8FA; }
-    input[type=range] { -webkit-appearance: none; height: 6px; border-radius: 3px; background: #e0e0e0; outline: none; }
-    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #e94560; cursor: pointer; }
     input, select, textarea { -webkit-appearance: none; }
     ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
   </style>
@@ -43,9 +41,9 @@ const SEED_ORDERS = [
   { id:uid(), client:"Михайло Лис",   phone:"+380669998877", item:"Брелок-авто",      grams:8,   printHours:0.3, price:60,  hasModel:true,  modelHours:1, modelRate:150, status:"Новый",    date:"2025-06-23", filament:"PLA", note:"" },
 ];
 const SEED_FILAMENTS = [
-  { id:uid(), name:"PLA",      color:"#aaa", stock:1000, cost:0.28 },
-  { id:uid(), name:"PLA Silk", color:"#aaa", stock:1000, cost:0.35 },
-  { id:uid(), name:"PETG",     color:"#aaa", stock:1000, cost:0.35 },
+  { id:uid(), name:"PLA",      color:"#aaa", stock:1000, cost:0.28, sellPrice:0.6 },
+  { id:uid(), name:"PLA Silk", color:"#aaa", stock:1000, cost:0.35, sellPrice:0.7 },
+  { id:uid(), name:"PETG",     color:"#aaa", stock:1000, cost:0.35, sellPrice:0.7 },
 ];
 const SEED_POINTS = [
   { id:uid(), name:"Кофейня Roast", address:"вул. Дерибасівська, 12", instagram:"@roast_coffee", telegram:"", phone:"+380671234567",
@@ -652,21 +650,16 @@ function Orders({ orders, setOrders, filaments, calcOrder }) {
 
 // ── CALCULATOR ──────────────────────────────────────────────────────────────────
 function Calculator({ filaments, prefill, setPrefill, setOrders }) {
-  const [grams,      setGrams]      = useState(20);
-  const [printHours, setPrintHours] = useState(1);
+  const [grams,      setGrams]      = useState("20");
+  const [printHours, setPrintHours] = useState("1");
   const [filIdx,     setFilIdx]     = useState(0);
-  const [markup,     setMarkup]     = useState(100);
-  const [elec,       setElec]       = useState(4.5);
   const [hasModel,   setHasModel]   = useState(false);
-  const [modelHours, setModelHours] = useState(3);
-  const [modelRate,  setModelRate]  = useState(100);
+  const [modelHours, setModelHours] = useState("3");
+  const [modelRate,  setModelRate]  = useState("100");
+  const [discount,   setDiscount]   = useState("");
   const [added, setAdded]           = useState(false);
-
-  // When prefill arrives from AI, load client info
-  const { useState: _, useEffect } = { useState, useEffect: (fn, deps) => { } };
-
-  // Apply prefill on mount
   const [clientInfo, setClientInfo] = useState(null);
+
   if (prefill && !clientInfo) {
     setClientInfo(prefill);
     const fi = filaments.findIndex(f => f.name === prefill.filament);
@@ -675,14 +668,24 @@ function Calculator({ filaments, prefill, setPrefill, setOrders }) {
     setPrefill(null);
   }
 
-  const fil        = filaments[filIdx]||{cost:0.28};
-  const matCost    = grams * fil.cost;
-  const elecCost   = printHours * elec;
-  const modelCost  = hasModel ? modelHours * modelRate : 0;
-  const printCost  = matCost + elecCost;
-  const printPrice = printCost * (1 + markup/100);
-  const totalPrice = printPrice + modelCost;
-  const profit     = totalPrice - printCost;
+  const fil        = filaments[filIdx] || { cost:0.28, sellPrice:0.6 };
+  const g          = parseFloat(grams)      || 0;
+  const ph         = parseFloat(printHours) || 0;
+  const mh         = parseFloat(modelHours) || 0;
+  const mr         = parseFloat(modelRate)  || 0;
+
+  const disc        = parseFloat(discount) || 0;
+
+  const matCost      = g * fil.cost;                       // собівартість матеріалу
+  const matSell      = g * (fil.sellPrice ?? fil.cost*2);   // продажна ціна матеріалу
+  const modelCost    = hasModel ? mh * mr : 0;              // дохід з моделі
+
+  const totalCost     = matCost;                            // собівартість
+  const priceNoDisc    = matSell + modelCost;                // ціна без знижки
+  const discountAmount = priceNoDisc * (disc/100);           // сума знижки
+  const totalPrice     = priceNoDisc - discountAmount;       // фінальна ціна для клієнта
+  const profit         = totalPrice - totalCost;             // чистий прибуток
+  const isLoss          = profit < 0;
 
   const addOrder = () => {
     const newOrder = {
@@ -690,12 +693,12 @@ function Calculator({ filaments, prefill, setPrefill, setOrders }) {
       client:     clientInfo?.client || "",
       phone:      clientInfo?.phone  || "",
       item:       clientInfo?.item   || "",
-      grams,
-      printHours,
-      price:      Math.round(printPrice),
+      grams:      g,
+      printHours: ph,
+      price:      Math.round(totalPrice - modelCost),
       hasModel,
-      modelHours: hasModel ? modelHours : 0,
-      modelRate,
+      modelHours: hasModel ? mh : 0,
+      modelRate:  mr,
       status:     "Новый",
       date:       today(),
       filament:   fil.name,
@@ -706,11 +709,15 @@ function Calculator({ filaments, prefill, setPrefill, setOrders }) {
     setTimeout(() => setAdded(false), 3000);
   };
 
+  const numInput = (value, onChange, placeholder) => (
+    <input type="number" inputMode="decimal" value={value} onChange={e=>onChange(e.target.value)}
+      placeholder={placeholder} style={{...inputStyle, width:"100%", fontSize:16, padding:"10px 12px"}}/>
+  );
+
   return (
     <div>
       <h2 style={h2}>🧮 Калькулятор</h2>
 
-      {/* Client info banner if came from AI */}
       {clientInfo && (
         <div style={{ background:"linear-gradient(135deg,#f0ebff,#e8f4fd)", borderRadius:12, padding:"14px 18px", marginBottom:20, display:"flex", justifyContent:"space-between", alignItems:"center", flexWrap:"wrap", gap:10 }}>
           <div>
@@ -723,33 +730,55 @@ function Calculator({ filaments, prefill, setPrefill, setOrders }) {
         </div>
       )}
 
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:20 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))", gap:20 }}>
         <Card title="Параметри друку">
-          <Slider label="Грамів філаменту"    value={grams}      min={1}   max={500} onChange={setGrams}      unit="г"/>
-          <Slider label="Годин друку"          value={printHours} min={0.1} max={48}  step={0.1} onChange={setPrintHours} unit="год"/>
-          <Slider label="Електрика (грн/год)" value={elec}       min={1}   max={20}  step={0.5} onChange={setElec}       unit="грн/год"/>
-          <Slider label="Наценка на друк"      value={markup}     min={0}   max={500} step={5}   onChange={setMarkup}     unit="%"/>
-          <div style={{ marginTop:12 }}>
+          <div style={{ marginBottom:12 }}>
             <label style={labelStyle}>Філамент</label>
-            <select value={filIdx} onChange={e=>setFilIdx(+e.target.value)} style={{...inputStyle,width:"100%"}}>
-              {filaments.map((f,i)=><option key={f.id} value={i}>{f.name} ({f.cost} грн/г)</option>)}
+            <select value={filIdx} onChange={e=>setFilIdx(+e.target.value)} style={{...inputStyle,width:"100%", fontSize:15, padding:"10px 12px"}}>
+              {filaments.map((f,i)=><option key={f.id} value={i}>{f.name} (собів. {f.cost} / прод. {f.sellPrice ?? f.cost*2} грн/г)</option>)}
             </select>
           </div>
+          <div style={{ marginBottom:12 }}>
+            <label style={labelStyle}>Грамів філаменту</label>
+            {numInput(grams, setGrams, "20")}
+          </div>
+          <div>
+            <label style={labelStyle}>Годин друку</label>
+            {numInput(printHours, setPrintHours, "1")}
+          </div>
         </Card>
+
+        <div>
+          <Card title="Знижка">
+            <label style={labelStyle}>Знижка для клієнта, %</label>
+            {numInput(discount, setDiscount, "0 — без знижки")}
+            {disc > 0 && (
+              <div style={{ background:"#fff3cd", borderRadius:8, padding:"8px 12px", fontSize:13, color:"#856404", marginTop:8, fontWeight:600 }}>
+                🏷 Знижка {disc}%: −{fmt(discountAmount)} грн
+              </div>
+            )}
+          </Card>
+        </div>
 
         <div>
           <Card title="Розробка 3D-моделі">
             <label style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer", marginBottom:14, fontWeight:600 }}>
               <input type="checkbox" checked={hasModel} onChange={e=>setHasModel(e.target.checked)}
                 style={{ width:18, height:18, accentColor:"#9B59B6", cursor:"pointer" }}/>
-              <span style={{ color:hasModel?"#9B59B6":"#888" }}>Замовили розробку моделі</span>
+              <span style={{ color:hasModel?"#9B59B6":"#888" }}>Потрібна розробка моделі</span>
             </label>
             {hasModel ? (
               <>
-                <Slider label="Годин на модель"  value={modelHours} min={0.5} max={40}  step={0.5} onChange={setModelHours} unit="год"/>
-                <Slider label="Ставка за годину" value={modelRate}  min={50}  max={500} step={50}  onChange={setModelRate}  unit="грн/год"/>
-                <div style={{ background:"#f0ebff", borderRadius:8, padding:"10px 14px", fontSize:14, color:"#6d28d9", fontWeight:600, marginTop:4 }}>
-                  💜 Вартість моделі: {modelHours} × {modelRate} = <strong>{modelHours*modelRate} грн</strong>
+                <div style={{ marginBottom:12 }}>
+                  <label style={labelStyle}>Годин на розробку</label>
+                  {numInput(modelHours, setModelHours, "3")}
+                </div>
+                <div style={{ marginBottom:12 }}>
+                  <label style={labelStyle}>Ставка, грн/год</label>
+                  {numInput(modelRate, setModelRate, "100")}
+                </div>
+                <div style={{ background:"#f0ebff", borderRadius:8, padding:"10px 14px", fontSize:14, color:"#6d28d9", fontWeight:600 }}>
+                  💜 Дохід з моделі: {mh} × {mr} = <strong>{mh*mr} грн</strong>
                 </div>
               </>
             ) : (
@@ -764,12 +793,11 @@ function Calculator({ filaments, prefill, setPrefill, setOrders }) {
       {/* Результат */}
       <div style={{ marginTop:20, background:"linear-gradient(135deg,#0f3460,#16213e)", borderRadius:16, padding:24, color:"#fff" }}>
         <div style={{ fontSize:12, color:"#a0aec0", marginBottom:14, fontWeight:600, letterSpacing:1, textTransform:"uppercase" }}>Підсумок замовлення</div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))", gap:12, marginBottom:16 }}>
+
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:12, marginBottom:16 }}>
           {[
-            ["🎞 Матеріал",     `${fmt(matCost)} грн`,    "#3498DB"],
-            ["⚡ Електрика",    `${fmt(elecCost)} грн`,   "#F39C12"],
-            ["🔧 Собівартість", `${fmt(printCost)} грн`,  "#E74C3C"],
-            ...(hasModel ? [["📐 Модель", `${fmt(modelCost)} грн`, "#9B59B6"]] : []),
+            ["🎞 Матеріал (собів.)", `${fmt(matCost)} грн`,  "#888"],
+            ...(hasModel ? [["📐 Модель (дохід)", `${fmt(modelCost)} грн`, "#9B59B6"]] : []),
           ].map(([l,v,c])=>(
             <div key={l} style={{ background:"rgba(255,255,255,0.08)", borderRadius:10, padding:"12px 14px", borderTop:`3px solid ${c}` }}>
               <div style={{ fontSize:11, color:"#a0aec0" }}>{l}</div>
@@ -777,20 +805,23 @@ function Calculator({ filaments, prefill, setPrefill, setOrders }) {
             </div>
           ))}
         </div>
-        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
-          <div style={{ background:"#e94560", borderRadius:12, padding:"16px 20px" }}>
-            <div style={{ fontSize:12, color:"#ffc", marginBottom:4 }}>
-              Ціна клієнту {hasModel ? "(друк + модель)" : `(наценка ${markup}%)`}
-            </div>
-            <div style={{ fontSize:28, fontWeight:800 }}>{fmt(totalPrice)} грн</div>
-            {hasModel && <div style={{ fontSize:12, color:"rgba(255,255,255,0.7)", marginTop:4 }}>Друк {fmt(printPrice)} + Модель {fmt(modelCost)}</div>}
+
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:16 }}>
+          <div style={{ background:"rgba(231,76,60,0.15)", border:"2px solid #E74C3C", borderRadius:12, padding:"14px 18px" }}>
+            <div style={{ fontSize:12, color:"#ffb3ab", marginBottom:4 }}>Собівартість</div>
+            <div style={{ fontSize:22, fontWeight:800, color:"#E74C3C" }}>{fmt(totalCost)} грн</div>
           </div>
-          <div style={{ background:"rgba(46,204,113,0.15)", border:"2px solid #2ECC71", borderRadius:12, padding:"16px 20px" }}>
-            <div style={{ fontSize:12, color:"#a0aec0", marginBottom:4 }}>Ваш чистий прибуток</div>
-            <div style={{ fontSize:28, fontWeight:800, color:"#2ECC71" }}>{fmt(profit)} грн</div>
-            <div style={{ fontSize:11, color:"#6b7a99", marginTop:4 }}>виручка − собівартість</div>
+          <div style={{ background:"#e94560", borderRadius:12, padding:"14px 18px" }}>
+            <div style={{ fontSize:12, color:"#ffc", marginBottom:4 }}>Ціна для клієнта</div>
+            <div style={{ fontSize:22, fontWeight:800 }}>{fmt(totalPrice)} грн</div>
+            {hasModel && <div style={{ fontSize:11, color:"rgba(255,255,255,0.7)", marginTop:2 }}>матеріал {fmt(matSell)} + модель {fmt(modelCost)}</div>}
+          </div>
+          <div style={{ background: isLoss ? "rgba(231,76,60,0.2)" : "rgba(46,204,113,0.15)", border:`2px solid ${isLoss?"#E74C3C":"#2ECC71"}`, borderRadius:12, padding:"14px 18px" }}>
+            <div style={{ fontSize:12, color:"#a0aec0", marginBottom:4 }}>{isLoss ? "Збиток" : "Чистий прибуток"}</div>
+            <div style={{ fontSize:22, fontWeight:800, color: isLoss?"#E74C3C":"#2ECC71" }}>{fmt(Math.abs(profit))} грн</div>
           </div>
         </div>
+
         <button onClick={addOrder} style={{ width:"100%", background: added?"#27ae60":"#e94560", border:"none", borderRadius:12, padding:"14px", color:"#fff", fontSize:16, fontWeight:700, cursor:"pointer", transition:"background .2s" }}>
           {added ? "✅ Заказ додано в список!" : clientInfo ? `✅ Додати заказ для ${clientInfo.client}` : "✅ Додати заказ"}
         </button>
@@ -806,15 +837,21 @@ function FilamentTab({ filaments, setFilaments }) {
 
   const updateCost = (id, val) => {
     const v = parseFloat(val);
-    if(isNaN(v) || v <= 0) return;
+    if(isNaN(v) || v < 0) return;
     setFilaments(prev => prev.map(f => f.id===id ? {...f, cost: v} : f));
+  };
+
+  const updateSellPrice = (id, val) => {
+    const v = parseFloat(val);
+    if(isNaN(v) || v < 0) return;
+    setFilaments(prev => prev.map(f => f.id===id ? {...f, sellPrice: v} : f));
   };
 
   const del = (id) => setFilaments(prev => prev.filter(f => f.id !== id));
 
   const addFilament = () => {
     if(!newName.trim()) return;
-    setFilaments(prev => [...prev, { id: uid(), name: newName.trim(), color: "#aaa", stock: 1000, cost: 0.28 }]);
+    setFilaments(prev => [...prev, { id: uid(), name: newName.trim(), color: "#aaa", stock: 1000, cost: 0.28, sellPrice: 0.6 }]);
     setNewName(""); setAdding(false);
   };
 
@@ -837,13 +874,13 @@ function FilamentTab({ filaments, setFilaments }) {
         </div>
       )}
 
-      <div style={{ background:"#fff", borderRadius:12, boxShadow:"0 2px 8px #0001", overflow:"hidden" }}>
+      <div style={{ background:"#fff", borderRadius:12, boxShadow:"0 2px 8px #0001", overflow:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse", fontSize:14 }}>
           <thead>
             <tr style={{ background:"#f7f8fa" }}>
               <th style={{ padding:"12px 16px", textAlign:"left", fontWeight:600, color:"#555" }}>Філамент</th>
-              <th style={{ padding:"12px 16px", textAlign:"left", fontWeight:600, color:"#555" }}>Ціна за грам</th>
-              <th style={{ padding:"12px 16px", textAlign:"left", fontWeight:600, color:"#555" }}>Ціна за кг</th>
+              <th style={{ padding:"12px 16px", textAlign:"left", fontWeight:600, color:"#555" }}>Собівартість/г</th>
+              <th style={{ padding:"12px 16px", textAlign:"left", fontWeight:600, color:"#555" }}>Ціна для клієнта/г</th>
               <th style={{ padding:"12px 16px" }}></th>
             </tr>
           </thead>
@@ -854,16 +891,24 @@ function FilamentTab({ filaments, setFilaments }) {
                 <td style={{ padding:"12px 16px" }}>
                   <div style={{ display:"flex", alignItems:"center", gap:6 }}>
                     <input
-                      type="number" step="0.01" min="0.01"
+                      type="number" step="0.01" min="0"
                       defaultValue={f.cost}
                       onBlur={e => updateCost(f.id, e.target.value)}
-                      style={{ ...inputStyle, width:90, padding:"6px 10px", fontSize:14, fontWeight:600, color:"#0f3460" }}
+                      style={{ ...inputStyle, width:90, padding:"6px 10px", fontSize:14, fontWeight:600, color:"#e74c3c" }}
                     />
                     <span style={{ color:"#888", fontSize:13 }}>грн/г</span>
                   </div>
                 </td>
-                <td style={{ padding:"12px 16px", color:"#888", fontSize:13 }}>
-                  {fmt(f.cost * 1000)} грн/кг
+                <td style={{ padding:"12px 16px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:6 }}>
+                    <input
+                      type="number" step="0.01" min="0"
+                      defaultValue={f.sellPrice ?? f.cost*2}
+                      onBlur={e => updateSellPrice(f.id, e.target.value)}
+                      style={{ ...inputStyle, width:90, padding:"6px 10px", fontSize:14, fontWeight:600, color:"#27ae60" }}
+                    />
+                    <span style={{ color:"#888", fontSize:13 }}>грн/г</span>
+                  </div>
                 </td>
                 <td style={{ padding:"12px 16px", textAlign:"right" }}>
                   <button onClick={()=>del(f.id)} style={btnIcon}>🗑</button>
