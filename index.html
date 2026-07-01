@@ -950,8 +950,8 @@ function PointsTab({ points, setPoints }) {
   const totalSold    = (p) => kc(p).reduce((s,k)=>s+k.sold,0);
   const totalInStock = (p) => kc(p).reduce((s,k)=>s+(k.qty-k.sold)*k.price,0);
   const totalUnpaid  = (p) => kc(p).reduce((s,k)=>s+k.sold*k.price,0) - pays(p).reduce((s,pay)=>s+pay.amount,0);
-  const totalEarned  = (p) => pays(p).reduce((s,pay)=>s+pay.amount,0);
-  const thisMonth    = (p) => { const m=new Date().toISOString().slice(0,7); return pays(p).filter(pay=>pay.date.startsWith(m)).reduce((s,pay)=>s+pay.amount,0); };
+  const totalEarned  = (p) => pays(p).reduce((s,pay)=>s+pay.amount,0) + (p.pointOrders||[]).reduce((s,o)=>s+(o.price||0),0);
+  const thisMonth    = (p) => { const m=new Date().toISOString().slice(0,7); return pays(p).filter(pay=>pay.date.startsWith(m)).reduce((s,pay)=>s+pay.amount,0) + (p.pointOrders||[]).filter(o=>o.date&&o.date.startsWith(m)).reduce((s,o)=>s+(o.price||0),0); };
 
   if (profile && pt) return <PointProfile pt={pt} setPoints={setPoints} onBack={()=>setProfile(null)}
     totalStock={totalStock} totalSold={totalSold} totalInStock={totalInStock}
